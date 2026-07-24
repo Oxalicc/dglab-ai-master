@@ -189,4 +189,4 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 - `references/playbook.md` — 郊狼使用技巧（三阶段设备技法）与话术引导（语义模板）
 - `references/scenario-design.md` — 剧本创作指南 + LLM 提示词契约
 - `assets/session_config.example.json` — 用户配置模板（安全词/红线/Watchdog 全部在此设定）
-- `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / yandere_dog 病娇驯犬）
+- `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / defeat 战败）

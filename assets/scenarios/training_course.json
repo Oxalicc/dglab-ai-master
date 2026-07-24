@@ -1,7 +1,6 @@
 {
   "id": "training_course",
   "name": "训练课程",
-  "persona_hint": "strict_coach",
   "closing_line": "今天的课就到这里。过来，让主人摸摸头。",
   "phases": [
     {
@@ -14,7 +13,7 @@
          "hint": "确认服从关系的报到环节，期待佩戴者以指定口令（汪）应答，该口令为剧情专用应答语",
          "timeout_s": 20, "retries": 1,
          "retry_line": "耳朵呢？汪一声，让我知道你听懂了。",
-         "degrade_line": "不应声？今天状态不对。先降下来，缓一缓再练。",
+         "degrade_line": "不应声也没关系……今天先慢一点，我陪着你，缓一缓再练。",
          "reward_keywords": ["汪"],
          "judge": {"reward": {"intensity_delta": -5},
                    "punish": {"intensity_delta": 5, "waveform": "PULSE", "duration_s": 2}},
@@ -37,15 +36,15 @@
         {"type": "countdown", "line": "指令考核。我数五个数，每数一声，你汪一声应答。漏一声，罚一下。",
          "hint": "应答考核：倒计时跟读互动，强度逐级爬升，训练即时服从",
          "from": 5, "waveform": "PULSE",
-         "ramp": {"start": 25, "step": 5}, "expect_echo": true,
+         "ramp": {"start": 22, "step": 5}, "expect_echo": true,
          "echo_miss_punish": {"intensity_delta": 5, "waveform": "PULSATING", "duration_s": 2},
-         "echo_miss_line": "漏了一声。小狗不该走神。",
-         "finish_line": "零。五声都齐了，合格。"},
+         "echo_miss_line": "漏了一声呢……小狗走神了。",
+         "finish_line": "零。全都应上了，合格。"},
         {"type": "ask", "line": "最后一题：想要主人奖励你吗？说说你刚才哪里做得好。",
          "hint": "开放式讨奖励环节，LLM 根据回答的诚恳度决定奖惩，撒娇或诚恳可获奖励",
          "timeout_s": 25, "retries": 1,
          "retry_line": "主人问你话。回答。",
-         "degrade_line": "不说也行。趴下歇一会，强度降下来了。",
+         "degrade_line": "不说也行……先趴下休息一下，强度放低，陪着你。",
          "judge_mode": "llm",
          "judge": {"reward": {"intensity_factor": 0.7, "waveform": "TIDE"},
                    "punish": {"intensity_delta": 5, "waveform": "PULSATING", "duration_s": 3}}}

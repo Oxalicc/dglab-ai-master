@@ -100,9 +100,9 @@ dglab-ai-master/
 ├── assets/
 │   ├── session_config.example.json       # ⚙️ 你的配置模板（安全词/红线/Watchdog/人格）
 │   └── scenarios/                        # 🎬 场景剧本
-│       ├── training_course.json          # 「训练课程」— 冷酷教官，纪律至上
-│       ├── interrogation.json            # 「审讯室」— 病娇审讯官，心理压迫
-│       └── yandere_dog.json              # 「病娇的专属小狗」— 病娇主人，独占欲全开
+│       ├── training_course.json          # 「训练课程」— 项圈、随行、考核、评讲，四阶段服从训练
+│       ├── interrogation.json            # 「审讯室」— 心理压迫，层层施压
+│       └── defeat.json                   # 「败者处置」— 空手胜白刃后的心理支配，身份剥夺与精神重塑
 ├── scripts/
 │   ├── check_env.py                      # 🔍 环境依赖速检 + 一键安装
 │   ├── safety_layer.py                   # 🛡️ 安全核心（意图分类/钳制/FSM/Watchdog）
@@ -160,8 +160,7 @@ dglab-ai-master/
 |----------|------|------|
 | 🐭 **负鼠（Possum）支持** | 📋 规划中 | 接入负鼠，与郊狼并列支持 |
 | 🔌 **多设备自动识别** | 📋 规划中 | 插上自动识别郊狼/负鼠型号与协议，无需手动选择 |
-| 🎬 **战败剧情** | 📋 规划中 | 新增「战败」场景剧本（defeat.json），胜者对败者的余兴节目 |
-| 🧠 **多平台 LLM 适配** | 🔧 进行中 | 目前已测试 **Kimi**，后续将陆续适配更多 LLM 平台，欢迎反馈各平台表现 |
+| 🧠 **多平台 agent 适配** | 🔧 进行中 | 目前已测试 **Kimi**，后续将陆续适配更多 agent 平台，欢迎反馈各平台表现 |
 
 ## 🤝 一起搞事情！
 
