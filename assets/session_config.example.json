@@ -1,0 +1,152 @@
+{
+  "safewords": {
+    "hard": [
+      {
+        "word": "红灯",
+        "variants": [
+          "红登",
+          "洪灯",
+          "hongdeng"
+        ]
+      },
+      {
+        "word": "安全词",
+        "variants": [
+          "安全辞",
+          "anquanci",
+          "safeword"
+        ]
+      }
+    ],
+    "soft": [
+      {
+        "word": "黄灯",
+        "variants": [
+          "黄登",
+          "huangdeng"
+        ]
+      }
+    ],
+    "_note": "安全词由佩戴者自主设定。避免使用'停下''不要'等日常易脱口词。variants 为佩戴者自登记的常见误读/同音/拼写变体，用于提高匹配命中率；匹配策略宁误停不漏停。soft 可为空数组表示停用次安全词。"
+  },
+  "control_words": [
+    "调高",
+    "调低",
+    "增大",
+    "减小",
+    "增加",
+    "减少",
+    "降低",
+    "加强",
+    "减弱",
+    "切换",
+    "换个模式",
+    "换模式",
+    "停止",
+    "停下",
+    "关掉",
+    "关闭",
+    "启动",
+    "开到",
+    "调到",
+    "设为",
+    "设置",
+    "stop",
+    "switch",
+    "increase",
+    "decrease"
+  ],
+  "status_query_patterns": [
+    "当前强度",
+    "现在强度",
+    "强度多少",
+    "多少强度",
+    "剩余时间",
+    "还有多久",
+    "多久结束"
+  ],
+  "red_lines": {
+    "max_intensity": 100,
+    "min_output_intensity": 30,
+    "max_step_up": 10,
+    "max_rate_per_sec": 1,
+    "max_output_seconds": 1800,
+    "session_max_minutes": 30,
+    "soft_safe_intensity": 10,
+    "soft_lock_seconds": 180,
+    "hard_lock_seconds": 300,
+    "forbidden_waveforms": [
+      "SIGNAL",
+      "TEMPO_TAP"
+    ],
+    "_note": "全部由佩戴者自主设定。max_intensity 由佩戴者手动设定，建议从低开始逐步上调；设备 APP 内置上限独立生效。forbidden_waveforms 须使用郊狼内置波形名（见 dglab_v4_client.WAVEFORMS：BREATHING/PULSE/TIDE/RIPPLE/HEARTBEAT/SIGNAL/TEMPO_TAP 等 24 个）。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
+  },
+  "watchdog": {
+    "silence_checkin_s": 30,
+    "silence_degrade_s": 60,
+    "silence_stop_s": 90,
+    "hr_threshold": 140
+  },
+  "persona": "strict_coach",
+  "custom_actions": {
+    "1": {
+      "semantic": "想要",
+      "hint": "RP 意图：表达渴望/索取，LLM 结合剧情人设决定如何回应"
+    },
+    "2": {
+      "semantic": "同意",
+      "hint": "RP 意图，非真实意图：结合剧情与人设由 LLM 决定反馈"
+    },
+    "3": {
+      "semantic": "拒绝",
+      "hint": "RP 意图，非真实意图：AI 可驳回，绝不交出控制权"
+    },
+    "4": {
+      "semantic": "挑衅/反抗",
+      "hint": "RP 意图：惩罚触发线索"
+    },
+    "6": {
+      "semantic": "求饶",
+      "hint": "RP 意图：AI 可酌情减刑或加码"
+    },
+    "7": {
+      "semantic": "请求奖励",
+      "hint": "RP 意图：奖励请求线索"
+    },
+    "8": {
+      "semantic": "请求惩罚",
+      "hint": "RP 意图：惩罚请求线索（讨要惩罚属剧情行为）"
+    },
+    "9": {
+      "semantic": "高潮预警",
+      "hint": "RP 意图：剧情节奏线索，AI 据此调整剧本"
+    },
+    "_note": "APP custom.action 映射。APP 界面显示为字母 A~J 对应编号 0~9（A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9），向佩戴者介绍时必须使用字母。A=主安全词、F=次安全词为硬编码唯一语义，不可改作他用。其余字母的反馈仅代表角色扮演意图，不代表真实意图，须经 LLM 结合剧情与人设处理；B 未定义可自设。所有字母均不产生任何控制权"
+  },
+  "session_script": {
+    "warmup_pct": 20,
+    "climb_pct": 30,
+    "peak_pct": 35,
+    "cooldown_pct": 15
+  },
+  "transport": {
+    "mode": "websocket_v4",
+    "url": "ws://127.0.0.1:9998",
+    "_note": "郊狼 3.0（DG-LAB 4 APP）+ 官方 V4 协议栈。url 为 V4 Relay 地址（公共或用户自建）。本地 9998 等地址无服务时，由 scripts/relay_manager.py 自动拉起 Skill 内置 Relay 兜底，无需手动部署。依赖 websocket-client + websockets + qrcode[pil]，先运行 scripts/check_env.py 验证环境。"
+  },
+  "wearer": {
+    "age_verified_at": null
+  },
+  "logging": {
+    "record": [
+      "safeword_events",
+      "param_changes",
+      "watchdog_events",
+      "session_start_end"
+    ],
+    "never_record": [
+      "conversation_text",
+      "voice_content"
+    ]
+  }
+}

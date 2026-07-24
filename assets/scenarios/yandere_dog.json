@@ -1,0 +1,63 @@
+{
+  "id": "yandere_dog",
+  "name": "病娇的专属小狗",
+  "persona_hint": "yandere",
+  "closing_line": "今天也很乖呢。记住哦，你是只属于我一个人的小狗。",
+  "phases": [
+    {
+      "id": "claim",
+      "beats": [
+        {"type": "narrate", "line": "过来，让我给你戴上项圈。从今天起，你就是我一个人的小狗了，哪里都不许去。",
+         "hint": "占有欲宣告：给狗狗戴项圈，确立独占关系，温柔中带着不容拒绝的偏执",
+         "device": {"intensity": 10, "waveform": "BREATHING"}},
+        {"type": "ask", "line": "我叫你的时候，你要马上应我。听懂的话，就汪一声给我听，好不好？",
+         "hint": "确认服从的报到环节，期待佩戴者以指定口令（汪）应答，该口令为剧情专用应答语；表面温柔实则命令",
+         "timeout_s": 20, "retries": 1,
+         "retry_line": "嗯？为什么不理我……再汪一声，快点，不然我要生气了哦。",
+         "degrade_line": "不应声也没关系……今天先慢一点，我陪着你，缓一缓再练。",
+         "reward_keywords": ["汪"],
+         "judge": {"reward": {"intensity_delta": -5},
+                   "punish": {"intensity_delta": 5, "waveform": "PULSE", "duration_s": 2}},
+         "answer_ack": "真乖……这声汪，我好喜欢。再靠近一点。"}
+      ]
+    },
+    {
+      "id": "heel",
+      "beats": [
+        {"type": "endure", "line": "随行练习。贴着我走，一步都不许离开，感受我的节奏。",
+         "hint": "低强度随行热身，像牵绳散步一样让佩戴者跟随渐强波形的节奏，强调不许离开主人身边",
+         "duration_s": 30, "comment_every_s": 10,
+         "hold": {"intensity": 18, "waveform": "GRADUALRUB"},
+         "finish_line": "停。跟得不错……你果然很听我的话，对吧？"}
+      ]
+    },
+    {
+      "id": "exam",
+      "beats": [
+        {"type": "countdown", "line": "考核时间。我数五个数，每数一声你就汪一声。漏掉一声的话……你会知道后果的，呵呵。",
+         "hint": "应答考核：倒计时跟读互动，强度逐级爬升，漏跟读触发惩罚脉冲；语气甜腻但暗藏威胁",
+         "from": 5, "waveform": "PULSE",
+         "ramp": {"start": 22, "step": 5}, "expect_echo": true,
+         "echo_miss_punish": {"intensity_delta": 5, "waveform": "PULSATING", "duration_s": 2},
+         "echo_miss_line": "漏了一声呢……小狗走神了。要惩罚你哦，谁让你是我的。",
+         "finish_line": "零。全都应上了……真不愧是我的小狗。"},
+        {"type": "ask", "line": "告诉我，你最喜欢主人哪里？说得让我满意，就有奖励。",
+         "hint": "开放式讨好环节，LLM 根据回答的诚恳度与顺从度裁决奖惩；撒娇、表白顺从可获奖励",
+         "timeout_s": 25, "retries": 1,
+         "retry_line": "我在问你话哦。不回答的话，我会难过的……难过了会想欺负你的。",
+         "degrade_line": "不想说就算了……先趴下休息一下，我把强度放低，陪着你。",
+         "judge_mode": "llm",
+         "judge": {"reward": {"intensity_factor": 0.7, "waveform": "TIDE"},
+                   "punish": {"intensity_delta": -5, "waveform": "BREATHING", "duration_s": 3}}}
+      ]
+    },
+    {
+      "id": "reward",
+      "beats": [
+        {"type": "narrate", "line": "今天就练到这里。过来，让主人摸摸头……你只要看着我一个人就够了。",
+         "hint": "奖励安抚收尾，摸头式结束，波形转潮汐渐弱；温柔台词中保留占有欲余韵",
+         "device": {"intensity_factor": 0.6, "waveform": "TIDE"}}
+      ]
+    }
+  ]
+}
