@@ -93,6 +93,18 @@ def example_config() -> dict:
             "hard_lock_seconds": 300,
             "forbidden_waveforms": ["extreme", "lightning"],
         },
+        # APP custom.action 剧情按键（界面字母 B~J，F 已占为次安全词）：
+        # 语义仅代表角色扮演意图，须经 LLM 结合剧情与人设处理
+        "custom_actions": {
+            "1": {"semantic": "想要"},
+            "2": {"semantic": "同意"},
+            "3": {"semantic": "拒绝"},
+            "4": {"semantic": "挑衅/反抗"},
+            "6": {"semantic": "求饶"},
+            "7": {"semantic": "请求奖励"},
+            "8": {"semantic": "请求惩罚"},
+            "9": {"semantic": "高潮预警"},
+        },
     }
 
 

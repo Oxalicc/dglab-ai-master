@@ -197,6 +197,7 @@ class Bootstrap:
             "start_phrase", DEFAULT_START_PHRASE)
         self.speak("第 3/3 阶段：最终确认。")
         self.speak(SAFETY_BRIEFING.format(hard=hard, soft=soft))
+        self.speak(self._button_briefing())
         self.speak(f"全部准备就绪。说'{start_phrase}'正式启动 Session。")
         while True:
             answer = self.hear().strip()
@@ -208,6 +209,27 @@ class Bootstrap:
             age_verified=bool((self.config.get("wearer") or {}).get("age_verified_at")),
         )
         self.speak("Session 启动。")
+
+    def _button_briefing(self):
+        """APP 十个按键（界面显示为字母 A~J）的含义说明。
+        A/F 为硬编码安全词语义；其余字母的语义取自配置 custom_actions，
+        只代表剧情意图。介绍一律用字母（APP 界面没有数字）。"""
+        mapping = self.config.get("custom_actions") or {}
+        rp = []
+        for n in range(1, 10):
+            letter = chr(ord("A") + n)
+            if letter == "F":
+                continue
+            sem = (mapping.get(str(n)) or {}).get("semantic")
+            if sem:
+                rp.append(f"{letter}={sem}")
+        text = ("APP 里的十个按键：A=主安全词，立即完全停止；"
+                "F=次安全词，把强度降到安全水平。")
+        if rp:
+            text += ("其余是剧情互动按键：" + "、".join(rp) +
+                     "。剧情按键只表达角色扮演的意图，不代表你的真实意愿，"
+                     "我会结合剧情回应，但不会因此交出控制权。")
+        return text
 
 
 if __name__ == "__main__":
