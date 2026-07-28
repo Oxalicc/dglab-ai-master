@@ -1,0 +1,60 @@
+name: Package Skill
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "SKILL.md"
+      - "assets/**"
+      - "references/**"
+      - "scripts/**"
+      - ".github/workflows/package-skill.yml"
+  push_tags:
+    - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Validate & Package .skill
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate skill structure
+        run: |
+          set -e
+          test -f SKILL.md || { echo "::error::SKILL.md not found"; exit 1; }
+          grep -q '^name: ' SKILL.md || { echo "::error::SKILL.md missing 'name' in frontmatter"; exit 1; }
+          grep -q '^description: ' SKILL.md || { echo "::error::SKILL.md missing 'description' in frontmatter"; exit 1; }
+          echo "Skill structure OK"
+
+      - name: Create .skill zip package
+        run: |
+          set -e
+          PKG="dglab-ai-master.skill"
+          FILES="SKILL.md"
+          [ -d assets ] && FILES="$FILES assets"
+          [ -d references ] && FILES="$FILES references"
+          [ -d scripts ] && FILES="$FILES scripts"
+          zip -r "$PKG" $FILES -x '*/.DS_Store' -x '*/__pycache__/*' -x '*.pyc'
+          unzip -l "$PKG"
+          echo "package=$PKG" >> "$GITHUB_OUTPUT"
+        id: zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dglab-ai-master-skill
+          path: ${{ steps.zip.outputs.package }}
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.zip.outputs.package }}
+          generate_release_notes: true
