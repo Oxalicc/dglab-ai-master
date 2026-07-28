@@ -46,9 +46,14 @@ jobs:
           path: ${{ steps.zip.outputs.package }}
           retention-days: 30
 
+      - name: Extract tag message as release body
+        if: github.ref_type == 'tag'
+        run: git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" > tag_body.md
+
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
           files: ${{ steps.zip.outputs.package }}
+          body_path: tag_body.md
           generate_release_notes: true

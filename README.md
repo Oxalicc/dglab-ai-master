@@ -6,11 +6,9 @@
 
 ## 下载
 
-最新 `.skill` 安装包永远在 Releases 页面：
+👉 **[点击下载 dglab-ai-master.skill（v1.0.0）](https://github.com/Oxalicc/dglab-ai-master/releases/download/v1.0.0/dglab-ai-master.skill)**
 
-👉 **[下载 dglab-ai-master.skill](https://github.com/Oxalicc/dglab-ai-master/releases/latest)**
-
-进入页面后，在 **Assets** 里点击 `dglab-ai-master.skill` 即可下载。它本质上是个 zip 压缩包，不用解压，直接交给 AI 安装。
+其他版本见 [Releases 页面](https://github.com/Oxalicc/dglab-ai-master/releases)。`.skill` 本质上是个 zip 压缩包，不用解压，直接交给 AI 安装。
 
 ## 它是什么
 
