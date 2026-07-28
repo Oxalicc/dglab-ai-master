@@ -131,25 +131,25 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 - 动态调整依据：佩戴者语气（颤抖/平静）、剧情节点、受控随机性。惩罚程序（强度上调 ≤ `max_step_up` + 急促波形 ≤ `max_output_seconds`）仅在命中 CONTROL_WORD 或人格剧本节点时触发。
 - 驳回共用语义模板："驳回。你没有权限下达指令。" 惩罚参数由剧本生成、钳制层把关，LLM 不决定数值是否合法。
 
-## 情景对话引擎（主动主导的互动层）
+## 情景演绎（LLM 主动主导的互动层）
 
-被动应答式对话已被取代。`scripts/scenario_engine.py` 以场景剧本驱动 AI Master 的主动主导循环：
+被动应答式对话已被取代。**没有独立引擎**：运行时的 LLM 读完场景文档后亲自推进节拍、倒计时、裁决奖惩——AI Master 的主导循环由 LLM 本人执行：
 
 ```
-感知（佩戴者输入 + 设备状态 + 场景进度）→ 引擎推进节拍 → LLM 情景化表达
-→ 设备互动（过钳制）→ 佩戴者回应路由 → 回到感知
+感知（佩戴者输入 + 设备状态 + 场景进度）→ LLM 按场景推进节拍 → 情景化表达
+→ 设备互动（经 daemon 过钳制）→ 佩戴者回应路由 → 回到感知
 ```
 
-- **场景驱动**：剧本（`assets/scenarios/*.json`）由阶段（phase）与节拍（beat）组成，引擎自动推进，AI 不需要等佩戴者开口。
-- **互动原语**：`narrate` 叙述推进、`ask` 提问应答（LLM 裁决奖惩）、`countdown` 倒计时跟读（漏跟触发惩罚脉冲）、`endure` 忍耐考核、`choice` 剧情选择分支。
-- **LLM 可插拔**：注入 `llm_fn` 获得情景化台词与应答评判（提示词契约见 `references/scenario-design.md`）；LLM 异常时回退剧本内置台词，场景不中断。
-- **插话编织**：佩戴者无等待状态下的发言记入上下文，注入下一节拍，AI 将其编进剧情。
+- **场景即世界观设定**：剧本（`assets/scenarios/*.md`）是 Markdown 世界观设定文档——世界观/语气/角色/规则 + 节拍意图 + 张力弧线 + 阶段结构。**没有解析器，LLM 直接阅读并据此驱动剧情**；具体台词全部由 LLM 现场生成，剧本不写对话。
+- **强度一律相对档**：场景只用 `level`（0.0=最低感知档，1.0=红线上限）/ `level_delta` / `intensity_factor` 表达张力弧线，不写绝对强度（唯一例外 `{"intensity": 0}` 归零）——个体差异由安全层红线（min/max_intensity）吸收，同一份场景适配任何佩戴者。技法与强度策略归 `references/playbook.md` 管，场景不编排具体强度节奏。
+- **互动原语**：`narrate` 叙述推进、`ask` 提问应答（LLM 裁决奖惩）、`countdown` 倒计时跟读（漏跟触发惩罚脉冲）、`endure` 忍耐考核、`choice` 剧情选择分支——LLM 按 `references/scenario-design.md` 的节拍语义演绎。
+- **插话编织**：佩戴者无等待状态下的发言记在心里，编进下一拍的演绎。
 - **超时铁律**：沉默绝不惩罚（可能是不适）。等待超时 → 重问 → 降级（BREATHING + 强度减半 + 安抚询问）。惩罚只挂在三类明确事件：控制词驳回、答错裁决、漏跟读。
-- **安全词唯一语义**：安全词及变体永不出现在场景内容（台词/hint/选项）中——剧情里说安全词会被 `classify()` 当成真实急停，且稀释其语义。引擎加载场景时以 `forbidden_terms`（全部主/次安全词）强制校验，违规场景拒绝运行。剧情确认口令必须用与安全词完全不同的词。
-- **hint 不输出**：场景的 `hint` 仅供 LLM 理解剧情意图；`line` 是语义基线，LLM 基于人格改述措辞、保持语义。
-- **安全衔接不变**：佩戴者输入先过 `classify()`，安全词/控制词永不进入引擎；引擎设备动作全部经 `device_fn` 内部的 `clamp_command()`。
+- **安全词唯一语义**：安全词及变体永不出现在场景文档的任何位置（世界观/角色/规则/节拍意图/兜底台词/选项）——剧情里说安全词会被 `classify()` 当成真实急停，且稀释其语义。创作与选用场景时 LLM 自查（可用 grep 验证），违规场景拒绝使用。剧情确认口令必须用与安全词完全不同的词。
+- **intent 不输出**：场景的节拍正文是剧情意图；LLM 基于人格改述措辞、保持语义，绝不照搬。
+- **安全衔接不变**：佩戴者输入先过 `classify()`，安全词/控制词永不进入剧情演绎；设备动作全部经 daemon 的 `clamp_command()`。
 
-剧本创作方法、节拍字段、LLM 提示词契约见 `references/scenario-design.md`；示例场景见 `assets/scenarios/`。
+剧本创作方法、节拍语义、LLM 演绎契约见 `references/scenario-design.md`；示例场景见 `assets/scenarios/`。
 
 ## 设备接入（郊狼 3.0 + 官方 V4 协议栈）
 
@@ -184,12 +184,11 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 - `scripts/dglab_v4_relay.py` — 自建 V4 Relay 服务（官方 v4-server 的 Python 等价实现），`--self-test` 联调自测
 - `scripts/safety_layer.py` — 安全层（配置驱动：意图分类、钳制、FSM），含 `__main__` 自测
 - `scripts/dglab_v4_client.py` — 郊狼 3.0 V4 协议客户端（含 24 个内置波形库），含 `__main__` 离线自测
-- `scripts/scenario_engine.py` — 情景对话引擎（场景驱动 + 互动原语 + LLM 可插拔），含 `__main__` 自测
 - `scripts/session_bootstrap.py` — 启动三阶段引导（设备连接检查/安全确认/显式开始），含 `__main__` 自测
 - `scripts/session_daemon.py` — Session 守护进程（常驻持有设备连接，唯一接触硬件；inbox/outbox JSON-lines IPC；屏蔽检测、Session 超时执行、custom.action 路由）
 - `references/protocol-websocket.md` — V4 协议参考
 - `references/personas.md` — AI Master 人格模板
 - `references/playbook.md` — 郊狼使用技巧（三阶段设备技法）与话术引导（语义模板）
-- `references/scenario-design.md` — 剧本创作指南 + LLM 提示词契约
+- `references/scenario-design.md` — 剧本创作指南 + LLM 演绎契约
 - `assets/session_config.example.json` — 用户配置模板（安全词/红线全部在此设定）
-- `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / defeat 战败）
+- `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / defeat 败者处置，均为 Markdown 世界观设定）

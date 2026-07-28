@@ -12,7 +12,10 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   {"cmd":"input","text":"..."}            佩戴者文本输入（先过 classify 路由）
   {"cmd":"device","channel":"A","intensity":40,"waveform":"PULSE",
    "duration_seconds":3}                  设备指令（强制过 clamp_command）
+  {"cmd":"device","channel":"A","level":0.5}  相对档位：0.0=最低感知档 …
+                                            1.0=红线上限（推荐，个体差异由红线吸收）
   {"cmd":"device","channel":"A","delta":5}  相对增减强度 t:3（红线内联校验）
+  {"cmd":"device","channel":"A","level_delta":0.25}  相对增减（档位区间比例）
   {"cmd":"authorize_start"}               上层已核实开始口令后调用
   {"cmd":"manual_reset"}                  SAFE_LOCK 解锁（上层已核实物理确认）
   {"cmd":"shutdown"}                      急停 + 清理 + 退出
@@ -329,7 +332,7 @@ class Daemon:
         if not self._ensure_client():
             return
         # 相对增减（t:3，官方 SDK 惯用原语）：红线内联校验
-        if "delta" in msg:
+        if "delta" in msg or "level_delta" in msg:
             self.handle_delta(msg)
             return
         channel = msg.get("channel", "A")
@@ -337,9 +340,13 @@ class Daemon:
             self.emit("output_shielded", channel=channel,
                       hint="设备通道被屏蔽输出，请在 APP 中「解除屏蔽输出」")
             return
+        intensity = msg.get("intensity")
+        if intensity is None and msg.get("level") is not None:
+            # 相对档位（0.0=最低感知档 … 1.0=红线上限），个体差异由红线吸收
+            intensity = self.sl.resolve_level(msg.get("level"))
         cmd = Command(
             channel=channel,
-            intensity=msg.get("intensity"),
+            intensity=intensity,
             waveform=msg.get("waveform"),
             duration_seconds=float(msg.get("duration_seconds") or 0.0),
         )
@@ -377,7 +384,11 @@ class Daemon:
                       hint="设备通道被屏蔽输出，请在 APP 中「解除屏蔽输出」")
             return
         try:
-            delta = int(msg.get("delta"))
+            if msg.get("level_delta") is not None:
+                # 相对增减（档位区间比例），换算后走同一套红线校验
+                delta = self.sl.resolve_level_delta(msg.get("level_delta"))
+            else:
+                delta = int(msg.get("delta"))
         except (TypeError, ValueError):
             self.emit("device_rejected", reason="delta 非法")
             return

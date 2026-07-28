@@ -269,6 +269,20 @@ class SafetyLayer:
 
     # ---------- 指令钳制（LLM → 硬件 之前，每条必过） ----------
 
+    def resolve_level(self, level: float) -> int:
+        """相对档位 → 绝对强度：0.0 = min_output_intensity（最低感知档），
+        1.0 = max_intensity（红线上限），超出截断。
+        剧本/LLM 只应使用相对档位——个体差异（耐受度）由佩戴者自己的
+        红线数值吸收，场景文件中不写绝对强度。"""
+        lv = min(max(float(level), 0.0), 1.0)
+        lo, hi = self.red.min_output_intensity, self.red.max_intensity
+        return int(round(lo + (hi - lo) * lv))
+
+    def resolve_level_delta(self, level_delta: float) -> int:
+        """相对增减 → 绝对增量：按档位区间（max-min）的比例换算。"""
+        span = self.red.max_intensity - self.red.min_output_intensity
+        return int(round(float(level_delta) * span))
+
     def clamp_command(self, cmd: Command, now: Optional[float] = None) -> Command:
         """返回截断后的合法指令；不可执行时抛 SafetyViolation。"""
         now = now if now is not None else time.time()
@@ -456,5 +470,15 @@ if __name__ == "__main__":
     # ---- IDLE 下重载配置成功，新安全词立即生效 ----
     s.reload_config(cfg2_path)
     assert s.classify("菠萝") is Intent.SAFE_HARD
+
+    # ---- 相对档位解析（个体差异由红线吸收） ----
+    s3 = SafetyLayer(example_config())   # min 30 / max 100
+    assert s3.resolve_level(0.0) == 30
+    assert s3.resolve_level(1.0) == 100
+    assert s3.resolve_level(0.5) == 65
+    assert s3.resolve_level(1.5) == 100   # 超界截断
+    assert s3.resolve_level(-0.2) == 30
+    assert s3.resolve_level_delta(0.25) == 18   # (100-30)*0.25 ≈ 17.5 → 18
+    assert s3.resolve_level_delta(-0.1) == -7
 
     print("safety_layer self-test OK: all assertions passed")
