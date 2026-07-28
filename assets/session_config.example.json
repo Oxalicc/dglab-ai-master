@@ -69,17 +69,16 @@
     "max_intensity": 100,
     "min_output_intensity": 30,
     "max_step_up": 10,
-    "max_rate_per_sec": 1,
+    "step_up_cooldown_seconds": 30,
     "max_output_seconds": 1800,
     "session_max_minutes": 30,
     "soft_safe_intensity": 10,
     "soft_lock_seconds": 180,
     "hard_lock_seconds": 300,
     "forbidden_waveforms": [
-      "SIGNAL",
-      "TEMPO_TAP"
+      "SIGNAL"
     ],
-    "_note": "全部由佩戴者自主设定。max_intensity 由佩戴者手动设定，建议从低开始逐步上调；设备 APP 内置上限独立生效。forbidden_waveforms 须使用郊狼内置波形名（见 dglab_v4_client.WAVEFORMS：BREATHING/PULSE/TIDE/RIPPLE/HEARTBEAT/SIGNAL/TEMPO_TAP 等 24 个）。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
+    "_note": "全部由佩戴者自主设定。max_intensity 由佩戴者手动设定，建议从低开始逐步上调；设备 APP 内置上限独立生效。上调安全由上调预算机制保证：预算额度 = max_step_up，上调按幅度消耗、下调按幅度回补（降多少允许再升多少），预算耗尽后进入冷却，距上次上调满 step_up_cooldown_seconds 预算自动回满；起步（从 0 开到最小档）豁免。forbidden_waveforms 须使用郊狼内置波形名（见 dglab_v4_client.WAVEFORMS：BREATHING/PULSE/TIDE/RIPPLE/HEARTBEAT/SIGNAL/TEMPO_TAP 等 24 个）；注意 playbook 的惩罚峰值会用到 TEMPO_TAP/PULSATING/QUICK_RUB，禁用它们会导致峰值波形被替换为 BREATHING。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
   },
   "persona": "strict_coach",
   "custom_actions": {

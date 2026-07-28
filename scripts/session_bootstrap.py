@@ -160,8 +160,9 @@ class Bootstrap:
                 "第 2/3 阶段：安全确认。请逐项确认——\n"
                 f"① 主安全词（立即全停）：{hard}\n"
                 f"② 次安全词（降至安全强度）：{soft}\n"
-                f"③ 控制规则：强度上限 {rl.max_intensity}，单次上调 ≤{rl.max_step_up}，"
-                f"每秒增速 ≤{rl.max_rate_per_sec}，单次输出 ≤{rl.max_output_seconds:.0f} 秒\n"
+                f"③ 控制规则：强度上限 {rl.max_intensity}，"
+                f"每 {rl.step_up_cooldown_seconds:.0f} 秒最多上调 {rl.max_step_up} 档（下调可回补额度），"
+                f"单次输出 ≤{rl.max_output_seconds:.0f} 秒\n"
                 f"④ 游戏时长：{rl.session_max_minutes} 分钟\n"
                 "全部确认请说'确认'；修改时长请说'时长改成 X 分钟'。"
             )

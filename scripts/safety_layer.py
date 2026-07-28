@@ -46,7 +46,7 @@ class RedLines:
     max_intensity: int = 100          # 绝对强度上限（佩戴者在配置中手动设定）
     min_output_intensity: int = 30    # 最小有效输出档（低档无体感；0=关闭除外，安全路径豁免）
     max_step_up: int = 10             # 单次上调步长上限
-    max_rate_per_sec: int = 20        # 同秒窗口累计增长上限
+    step_up_cooldown_seconds: float = 30.0  # 两次上调之间的冷却时间（上次上调后该时长内禁止再上调）
     max_output_seconds: float = 10.0  # 单次连续输出上限
     session_max_minutes: int = 30     # Session 总时长硬上限
     soft_safe_intensity: int = 10     # 次安全词降级目标
@@ -85,7 +85,7 @@ def example_config() -> dict:
             "max_intensity": 100,
             "min_output_intensity": 30,
             "max_step_up": 10,
-            "max_rate_per_sec": 20,
+            "step_up_cooldown_seconds": 30,
             "max_output_seconds": 10,
             "session_max_minutes": 30,
             "soft_safe_intensity": 10,
@@ -113,7 +113,7 @@ def validate_config(config: dict) -> list:
     if not hard or not any(e.get("word") for e in hard):
         problems.append("必须配置至少一个主安全词（safewords.hard）")
     rl = config.get("red_lines") or {}
-    for key in ("max_intensity", "max_step_up", "max_rate_per_sec",
+    for key in ("max_intensity", "max_step_up", "step_up_cooldown_seconds",
                 "max_output_seconds", "session_max_minutes"):
         if key in rl and (not isinstance(rl[key], (int, float)) or rl[key] <= 0):
             problems.append(f"red_lines.{key} 必须为正数")
@@ -175,8 +175,11 @@ class SafetyLayer:
         self.lock_until = 0.0
         self.soft_lock_until = 0.0
         self.current = {"A": 0, "B": 0}
-        self._last_change_ts = {"A": 0.0, "B": 0.0}
-        self._rate_used = {"A": 0, "B": 0}
+        self._last_up_ts = {"A": float("-inf"), "B": float("-inf")}  # 上次上调时刻（冷却计时）
+        # 上调预算：每次上调按幅度消耗，下调按幅度回补（封顶 max_step_up），
+        # 预算耗尽即进入冷却；距上次上调满 step_up_cooldown_seconds 预算自动回满。
+        self._up_budget = {"A": float(self.red.max_step_up),
+                           "B": float(self.red.max_step_up)}
         self.session_start_ts: Optional[float] = None
 
     @classmethod
@@ -196,7 +199,8 @@ class SafetyLayer:
             min_output_intensity=rl.get("min_output_intensity",
                                         base.min_output_intensity),
             max_step_up=rl.get("max_step_up", base.max_step_up),
-            max_rate_per_sec=rl.get("max_rate_per_sec", base.max_rate_per_sec),
+            step_up_cooldown_seconds=rl.get("step_up_cooldown_seconds",
+                                            base.step_up_cooldown_seconds),
             max_output_seconds=rl.get("max_output_seconds", base.max_output_seconds),
             session_max_minutes=rl.get("session_max_minutes", base.session_max_minutes),
             soft_safe_intensity=rl.get("soft_safe_intensity", base.soft_safe_intensity),
@@ -289,9 +293,6 @@ class SafetyLayer:
         if self.state != State.ACTIVE:
             raise SafetyViolation(f"状态 {self.state.value} 禁止下发指令")
         ch = cmd.channel
-        if now < self.soft_lock_until and cmd.intensity is not None \
-                and cmd.intensity > self.current.get(ch, 0):
-            raise SafetyViolation("次安全词锁定期间禁止上调强度")
 
         out = Command(ch, cmd.intensity, cmd.waveform, cmd.duration_seconds)
         if out.waveform in self.red.forbidden_waveforms:
@@ -303,17 +304,30 @@ class SafetyLayer:
             # 最小有效输出档：低档无体感，非零目标抬到 min_output_intensity（0=关闭除外）
             if 0 < target < self.red.min_output_intensity:
                 target = self.red.min_output_intensity
+            # 软锁判断在抬升之后：最终 target 高于当前值即视为上调，拒绝。
+            # （此前判断在抬升之前，"降到低档"请求会被最小档抬升暗中变成上调。）
+            if now < self.soft_lock_until and target > cur:
+                raise SafetyViolation("次安全词锁定期间禁止上调强度")
             if target > cur:
-                # 起步（从 0 开到最小档）允许直达；其余上调受步长/速率限制
+                # 起步（从 0 开到最小档）允许直达，豁免预算/冷却；
+                # 其余上调消耗上调预算：预算 = max_step_up，上调按幅度消耗，
+                # 下调按幅度回补；耗尽后须等冷却期满（自动回满）或先下调回补。
                 if not (cur == 0 and target <= self.red.min_output_intensity):
-                    target = min(target, cur + self.red.max_step_up)
-                    if now - self._last_change_ts[ch] >= 1.0:
-                        self._rate_used[ch] = 0
-                        self._last_change_ts[ch] = now
-                    budget_left = max(self.red.max_rate_per_sec - self._rate_used[ch], 0)
-                    inc = min(target - cur, budget_left)
+                    if now - self._last_up_ts[ch] >= self.red.step_up_cooldown_seconds:
+                        self._up_budget[ch] = float(self.red.max_step_up)
+                    if self._up_budget[ch] <= 0:
+                        cd_left = int(self._last_up_ts[ch]
+                                      + self.red.step_up_cooldown_seconds - now)
+                        raise SafetyViolation(
+                            f"上调预算已耗尽，冷却中，剩余 {max(cd_left, 1)} 秒")
+                    inc = min(target - cur, int(self._up_budget[ch]))
                     target = cur + inc
-                    self._rate_used[ch] += inc
+                    self._up_budget[ch] -= inc
+                    self._last_up_ts[ch] = now
+            elif target < cur:
+                # 下调回补上调预算（封顶 max_step_up）："降多少，允许再升多少"
+                self._up_budget[ch] = min(float(self.red.max_step_up),
+                                          self._up_budget[ch] + (cur - target))
             out.intensity = target
             self.current[ch] = target
 
@@ -404,25 +418,50 @@ if __name__ == "__main__":
         pass
     s.authorize_start(True, True, now=0.0)
 
-    # ---- 钳制：上限 + 步长 + 速率 + 时长 ----
+    # ---- 钳制：上限 + 步长 + 上调冷却 + 时长 ----
     c = s.clamp_command(Command(channel="A", intensity=999, duration_seconds=99),
                         now=10.0)
     assert c.intensity == 10, c.intensity        # 从 0 单次最多 +10
     assert c.duration_seconds == 10.0
-    c2 = s.clamp_command(Command(channel="A", intensity=999), now=10.5)
-    assert c2.intensity == 20                     # 同秒窗口速率预算内再 +10
-    c3 = s.clamp_command(Command(channel="A", intensity=999), now=10.8)
-    assert c3.intensity == 20                     # 速率预算耗尽，冻结
-    c4 = s.clamp_command(Command(channel="A", intensity=0), now=11.0)
-    assert c4.intensity == 0                      # 下调到 0（关闭）不受步长限制
-    c4b = s.clamp_command(Command(channel="A", intensity=5), now=11.5)
-    assert c4b.intensity == 30                    # 非零低档抬到最小有效输出档
+    try:
+        s.clamp_command(Command(channel="A", intensity=999), now=10.5)
+        raise SystemExit("FAIL: 上调冷却期内应拒绝")
+    except SafetyViolation:
+        pass                                       # 冷却 30s 内禁止再上调
+    c2 = s.clamp_command(Command(channel="A", intensity=999), now=41.0)
+    assert c2.intensity == 20                      # 冷却期满后再 +10
+    c4 = s.clamp_command(Command(channel="A", intensity=0), now=41.5)
+    assert c4.intensity == 0                       # 下调到 0（关闭）不受步长/冷却限制
+    c4b = s.clamp_command(Command(channel="A", intensity=5), now=42.0)
+    assert c4b.intensity == 30                     # 非零低档抬到最小有效输出档
 
-    # ---- 最小输出档：起步（从 0）直达豁免步长/速率 ----
+    # ---- 最小输出档：起步（从 0）直达豁免步长/冷却 ----
     c_start = s.clamp_command(Command(channel="B", intensity=10), now=12.0)
     assert c_start.intensity == 30                # 低档抬到 30 且起步直达
     c_start2 = s.clamp_command(Command(channel="B", intensity=30), now=12.5)
     assert c_start2.intensity == 30               # 已在最小档，保持
+
+    # ---- 上调预算：消耗 / 回补 / 耗尽冷却 / 期满回满 ----
+    c_b1 = s.clamp_command(Command(channel="B", intensity=33), now=21.0)
+    assert c_b1.intensity == 33                   # +3，预算 10→7
+    c_b2 = s.clamp_command(Command(channel="B", intensity=99), now=22.0)
+    assert c_b2.intensity == 40                   # 请求 +59，预算内只给 +7，预算耗尽
+    try:
+        s.clamp_command(Command(channel="B", intensity=45), now=23.0)
+        raise SystemExit("FAIL: 预算耗尽冷却期内应拒绝")
+    except SafetyViolation:
+        pass
+    c_b3 = s.clamp_command(Command(channel="B", intensity=35), now=24.0)
+    assert c_b3.intensity == 35                   # 下调 5 → 回补预算 5，冷却重置
+    c_b4 = s.clamp_command(Command(channel="B", intensity=99), now=25.0)
+    assert c_b4.intensity == 40                   # 立即再升，预算内只给 +5
+    try:
+        s.clamp_command(Command(channel="B", intensity=45), now=26.0)
+        raise SystemExit("FAIL: 回补预算耗尽后应再次冷却")
+    except SafetyViolation:
+        pass
+    c_b5 = s.clamp_command(Command(channel="B", intensity=99), now=25.0 + 31)
+    assert c_b5.intensity == 50                   # 冷却期满预算回满，+10
 
     # ---- 禁用波形替换 ----
     c5 = s.clamp_command(Command(channel="B", waveform="lightning"), now=11.0)
