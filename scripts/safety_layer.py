@@ -267,7 +267,10 @@ class SafetyLayer:
         ]
 
     def on_safe_soft(self, now: Optional[float] = None) -> list:
-        """次安全词：降到安全强度 + 最舒缓波形，锁定期内禁止上调。"""
+        """次安全词：降到安全强度 + 最舒缓波形，锁定期内禁止上调。
+        跳过当前为 0 档的通道：0 档波形物理无感，且对屏蔽/未用通道
+        下发波形是无意义的协议流量（实机观察：B 通道 0 档被屏蔽时也
+        收到了 1800s 波形任务）。"""
         now = now if now is not None else time.time()
         if self.state != State.ACTIVE:
             return []
@@ -276,6 +279,8 @@ class SafetyLayer:
             self.current[ch] = min(self.current[ch], self.red.soft_safe_intensity)
         actions = []
         for ch in self.current:
+            if self.current[ch] <= 0:
+                continue  # 0 档通道无需降级、无需波形
             actions.append({"action": "set_strength", "channel": ch,
                             "value": self.current[ch]})
             actions.append({"action": "set_waveform", "channel": ch,
@@ -490,6 +495,13 @@ if __name__ == "__main__":
     acts = s.on_safe_soft(now=20.0)
     assert any(a["action"] == "announce" for a in acts)
     assert s.current["A"] <= s.red.soft_safe_intensity
+    # 0 档通道跳过（bug #4 修复）：构造只有 A 通道非零的层
+    s4 = SafetyLayer(example_config())
+    s4.authorize_start(True, True, now=0.0)
+    s4.clamp_command(Command(channel="A", intensity=30), now=1.0)
+    acts4 = s4.on_safe_soft(now=2.0)
+    assert acts4 and all(a.get("channel") == "A" for a in acts4
+                         if a["action"] != "announce"), acts4
     try:
         s.clamp_command(Command(channel="A", intensity=15), now=21.0)
         raise SystemExit("FAIL: 软锁定期不应允许上调")

@@ -144,7 +144,8 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 - **Session 总时长上限（红线）**：ACTIVE 期间 daemon 每秒检查
   `session_max_minutes`，到点自动急停缓释、回到 IDLE 并上报 `session_timeout`。
 - **无人看管自动退出**（阈值在配置 `"daemon"` 段可调）：
-  被控方断连超过 `detached_shutdown_s`（默认 300s）、或非 ACTIVE 状态空闲
+  被控方断连超过 `detached_shutdown_s`（默认 300s）、控制面（daemon↔Relay）
+  连接连续失败超过同一阈值、或非 ACTIVE 状态空闲
   超过 `idle_shutdown_s`（默认 600s，任何命令/APP 侧事件都刷新计时），
   daemon 自动急停退出并上报 `daemon_exit`——用户中途离开不会留下僵尸进程。
   ACTIVE 期间不因空闲退出（由总时长红线接管）。
@@ -195,7 +196,7 @@ AI Master 的主导循环由 LLM 本人执行——读完场景文档后亲自�
 
 **开局前必须引导用户在 APP 中确认（真机实测）**：
 
-- **关闭舒适设置里的「自动增加」**：否则设备会自己爬升强度，Master 失去独占控制，急停归零后还会再爬。
+- **关闭强度自适应里的「自动增加」**：否则设备会自己爬升强度，Master 失去独占控制，急停归零后还会再爬。（注意：快照里 `comfortLimit.autoIncr` 是硬件"上限自适应提升"，只调强度上限不爬强度，与此开关无关，不要据快照值误判用户没关。）
 - **「屏蔽输出」只能在 APP 里解除**：检测到通道被屏蔽时，提示用户"请在 APP 里「解除屏蔽输出」"，协议侧无法代劳。
 - Socket 模式下 APP 的强度滑块不可手动调整，属正常现象，提前告知避免用户疑惑。
 

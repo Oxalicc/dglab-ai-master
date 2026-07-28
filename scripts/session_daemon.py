@@ -115,7 +115,9 @@ class Daemon:
         self.client = DglabV4Client(url)
         self.client.on_event = self.handle_device_event
         controller_id = self.client.connect()
-        qr = self.client.pairing_qr_url()
+        # 二维码给手机扫：loopback 必须换成局域网 IP（本机连接仍用原 url）
+        from dglab_v4_client import pairing_qr_url as _mk_qr
+        qr = _mk_qr(relay_manager.lan_url(url), controller_id)
         qr_png = SKILL_DIR / "state" / "pairing_qr.png"
         try:
             import qrcode
@@ -517,19 +519,36 @@ class Daemon:
             return
 
         last_tick = 0.0
+        drain_fail_since = None   # 控制面（daemon↔Relay socket）连续失败起点
+        last_drain_error_emit = 0.0
         while self.running:
             # 先排空设备侧上报（custom.action 安全词/剧情动作等）
             if self.client and self.client.ws:
                 try:
                     self.client.drain_events()
+                    drain_fail_since = None
                 except DglabV4Error as e:
                     if "被控方已断开" in str(e):
                         self.emit("client_detached",
                                   hint="APP 已断开，等待重新接入")
                     else:
-                        self.emit("error", where="drain", message=str(e))
+                        drain_fail_since = drain_fail_since or time.time()
+                        if time.time() - last_drain_error_emit >= 30:
+                            last_drain_error_emit = time.time()
+                            self.emit("error", where="drain", message=str(e))
                 except Exception as e:  # noqa: BLE001
-                    self.emit("error", where="drain", message=str(e))
+                    drain_fail_since = drain_fail_since or time.time()
+                    if time.time() - last_drain_error_emit >= 30:
+                        last_drain_error_emit = time.time()
+                        self.emit("error", where="drain", message=str(e))
+            # 控制面连续失败 ≈ 连接已死：client_id 不会自动清空，
+            # 断连计时对这种情况是盲的（真机事故：socket 死亡后僵尸进程
+            # 刷了 7.5 小时错误日志）。按被控方断连同等处理。
+            if drain_fail_since is not None and \
+                    time.time() - drain_fail_since > self.detached_shutdown_s:
+                self._auto_exit(
+                    f"控制面连接连续失败超过 {int(self.detached_shutdown_s)}s")
+                break
             for msg in self.drain_inbox():
                 cmd = msg.get("cmd")
                 try:

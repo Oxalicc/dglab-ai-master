@@ -56,6 +56,21 @@ def effective_url(url: str) -> str:
                        parts.query, parts.fragment))
 
 
+def lan_url(url: str) -> str:
+    """供二维码/外部设备使用的 URL：loopback（127.0.0.1/localhost）替换为
+    当前探测的局域网 IP——手机扫码无法访问 127.0.0.1（那是手机自己）。
+    本机客户端连接仍应使用 effective_url 的原始 loopback。"""
+    from urllib.parse import urlunsplit
+    parts = urlsplit(url)
+    host = parts.hostname or "127.0.0.1"
+    if host not in ("127.0.0.1", "localhost"):
+        return effective_url(url)
+    ip = detect_lan_ip()
+    netloc = f"{ip}:{parts.port or 9998}"
+    return urlunsplit((parts.scheme, netloc, parts.path,
+                       parts.query, parts.fragment))
+
+
 def probe(url: str, timeout: float = 3.0) -> bool:
     """探测 Relay 是否可用：能建连并收到 hello 帧即为可用。"""
     try:
@@ -133,6 +148,9 @@ if __name__ == "__main__":
     assert effective_url("ws://127.0.0.1:9998") == "ws://127.0.0.1:9998"
     rewritten = effective_url("ws://192.168.0.1:9998")
     assert rewritten.startswith(f"ws://{ip}:"), rewritten
+    # lan_url：loopback 必须替换为局域网 IP（供手机扫码）
+    lu = lan_url("ws://127.0.0.1:9998")
+    assert lu.startswith(f"ws://{ip}:"), lu
 
     # ---- 自测：空闲端口上 ensure → 自建 → probe 成功 → stop ----
     test_url = "ws://127.0.0.1:19999"
