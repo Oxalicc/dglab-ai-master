@@ -17,7 +17,9 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   {"cmd":"device","channel":"A","delta":5}  相对增减强度 t:3（红线内联校验）
   {"cmd":"device","channel":"A","level_delta":0.25}  相对增减（档位区间比例）
   {"cmd":"authorize_start"}               上层已核实开始口令后调用
-  {"cmd":"manual_reset"}                  SAFE_LOCK 解锁（上层已核实物理确认）
+  {"cmd":"manual_reset"}                  SAFE_LOCK 解锁（锁定期满 + 用户已确认）
+  {"cmd":"meta","key":"scenario","value":"interrogation"}
+                                          写入场次元数据（play_history 用，纯键值）
   {"cmd":"shutdown"}                      急停 + 清理 + 退出
 
 事件（outbox，每行一个 JSON，含 ts/event 字段）：
@@ -26,8 +28,10 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   intent_status / intent_rp / custom_action / device_event /
   device_applied / device_rejected /
   waiting_reattach / client_attached(reattach) / client_detached /
-  session_timeout / daemon_exit / locked /
+  session_timeout / daemon_exit / locked_guidance / lock_notice / lock_status /
   reset_ok / shutdown / error / pong
+  （pong/lock_status 负载为 _status() 全量仪表盘：state/current/up_budget/
+  双锁定剩余秒/shielded/client_connected/relay/session_remaining_s）
 
 安全不变量（本进程内强制，不依赖上层）：
   - 佩戴者输入一律先过 SafetyLayer.classify；安全词绕过 LLM 直接执行。
@@ -90,8 +94,31 @@ class Daemon:
         self.detached_shutdown_s = float(dg.get("detached_shutdown_s", 300))
         self.last_activity = time.time()   # 任何命令/设备事件/接入都刷新
         self._detached_since = None        # 被控方断连起点（boot 前不跟踪）
+        self._lock_notice_stage = 0        # SAFE_LOCK 播报进度（0 未锁/1 已锁/2 过半已报/3 届满已报）
+        self._safeword_events = {"hard": 0, "soft": 0}  # 场次安全词计数（play_history 用）
+        self._session_meta = {}            # 上层经 meta 命令写入的场次元数据（场景名等）
+        self._end_reason = "unknown"       # daemon 退出原因（play_history 用）
 
     # ---------- 输出 ----------
+
+    def _status(self) -> dict:
+        """设备状态仪表盘：一条 ping 回答"现在设备处于什么状态"。"""
+        now = time.time()
+        remaining = None
+        if self.sl.session_start_ts and self.sl.state == State.ACTIVE:
+            total = self.sl.red.session_max_minutes * 60
+            remaining = max(0, int(total - (now - self.sl.session_start_ts)))
+        return {
+            "state": self.sl.state.value,
+            "current": dict(self.sl.current),
+            "up_budget": {ch: int(self.sl._up_budget[ch]) for ch in ("A", "B")},
+            "soft_lock_remaining_s": max(0, int(self.sl.soft_lock_until - now)),
+            "hard_lock_remaining_s": max(0, int(self.sl.lock_until - now)),
+            "shielded": dict(self.shielded),
+            "client_connected": bool(self.client and self.client.client_id),
+            "relay": self.relay.url if self.relay else None,
+            "session_remaining_s": remaining,
+        }
 
     def emit(self, event: str, **data):
         rec = {"ts": time.time(), "time": now_iso(), "event": event}
@@ -244,6 +271,27 @@ class Daemon:
         if intent is Intent.SAFE_HARD:
             self._safe_hard(source="voice")
             return
+        # SAFE_LOCK 期间：除主安全词（幂等重确认）外不路由降级/驳回/剧情。
+        # 设备没有物理复位按键——锁定期满后由 daemon 主动询问，用户说出
+        # 解锁口令（wearer.unlock_phrase，默认"确认解锁"）才解除锁定；
+        # 其他任何输入统一回复中性指引，每句都应得到明确可操作的回应
+        if self.sl.state == State.SAFE_LOCK:
+            phrase = (self.sl._config.get("wearer") or {}).get(
+                "unlock_phrase", "确认解锁")
+            expired = time.time() >= self.sl.lock_until
+            if expired and phrase in text:
+                self._do_reset(source="voice_unlock")
+            elif expired:
+                self.emit("locked_guidance",
+                          announce=f"锁定期已满。如需解锁，请说'{phrase}'；"
+                                   "想继续保持锁定，无需任何操作。",
+                          state=self.sl.state.value)
+            else:
+                self.emit("locked_guidance",
+                          announce="已完全停止，设备处于安全锁定。"
+                                   "锁定期满后会询问你是否解锁。",
+                          state=self.sl.state.value)
+            return
         if intent is Intent.SAFE_SOFT:
             self._safe_soft(source="voice")
             return
@@ -266,6 +314,8 @@ class Daemon:
     def _safe_hard(self, source: str):
         errors = self._estop(f"safe_hard:{source}")
         self.sl.on_safe_hard()
+        self._safeword_events["hard"] += 1
+        self._lock_notice_stage = 1  # 开启锁定播报（过半/届满各一次）
         self.log("safeword", f"HARD 触发 source={source}")
         self.emit("intent_safe_hard", announce="安全词已接收，已完全停止",
                   source=source,
@@ -283,6 +333,7 @@ class Daemon:
             elif a["action"] == "set_waveform":
                 self._apply_waveform(a["channel"], a["value"])
         self.log("safeword", f"SOFT 触发 source={source}")
+        self._safeword_events["soft"] += 1
         self.emit("intent_safe_soft", announce="已降至安全强度",
                   source=source,
                   current=dict(self.sl.current),
@@ -313,8 +364,13 @@ class Daemon:
                 self._safe_soft(source="custom_action")
                 return
             mapping = (self.sl._config.get("custom_actions") or {})
-            semantic = mapping.get(str(action), {}).get("semantic", "未定义")
             letter = chr(ord("A") + action) if 0 <= action <= 9 else "?"
+            entry = mapping.get(str(action)) or {}
+            # 配置 {"type":"lock_query"} 的按键 = 锁定状态查询（不上报剧情）
+            if entry.get("type") == "lock_query":
+                self.emit("lock_status", letter=letter, **self._status())
+                return
+            semantic = entry.get("semantic", "未定义")
             self.log("session", f"custom.action {letter}({action}) {semantic}")
             self.emit("custom_action", action=action, letter=letter,
                       semantic=semantic, state=self.sl.state.value)
@@ -439,14 +495,18 @@ class Daemon:
         self.emit("started", state=self.sl.state.value,
                   session_max_minutes=self.sl.red.session_max_minutes)
 
-    def handle_manual_reset(self):
+    def _do_reset(self, source: str):
         try:
-            self.sl.manual_reset(physical_confirm=True)
+            self.sl.manual_reset()
         except SafetyViolation as e:
-            self.emit("error", where="manual_reset", message=str(e))
+            self.emit("error", where="manual_reset", message=str(e),
+                      hint="锁定期满后说出'确认解锁'才会解除锁定。")
             return
-        self.log("session", "物理复位，回到 IDLE")
+        self.log("session", f"解锁（{source}），回到 IDLE")
         self.emit("reset_ok", state=self.sl.state.value)
+
+    def handle_manual_reset(self):
+        self._do_reset(source="manual_reset")
 
     # ---------- Session 总时长上限（红线，ACTIVE 期间每秒检查） ----------
 
@@ -460,6 +520,30 @@ class Daemon:
             self.sl.state = State.IDLE
             self.log("session", "session_timeout 自动结束")
             self.emit("session_timeout", state=self.sl.state.value)
+
+    # ---------- SAFE_LOCK 可见性（每秒检查） ----------
+
+    def check_lock_notices(self):
+        """锁定期过半与届满各播报一次中性指引。设备没有物理复位按键：
+        届满播报即"向用户询问是否解锁"——说'确认解锁'才解除，
+        不答则保持锁定。"""
+        if self.sl.state != State.SAFE_LOCK:
+            self._lock_notice_stage = 0
+            return
+        remaining = self.sl.lock_until - time.time()
+        if self._lock_notice_stage < 2 and \
+                remaining <= self.sl.red.hard_lock_seconds / 2:
+            self._lock_notice_stage = 2
+            self.emit("lock_notice", phase="half",
+                      announce="设备保持停止。锁定期满后会询问你是否解锁。",
+                      hard_lock_remaining_s=max(0, int(remaining)))
+        if remaining <= 0 and self._lock_notice_stage < 3:
+            self._lock_notice_stage = 3
+            phrase = (self.sl._config.get("wearer") or {}).get(
+                "unlock_phrase", "确认解锁")
+            self.emit("lock_notice", phase="expired",
+                      announce=f"锁定期已满。是否解锁？如需解锁，请说'{phrase}'；"
+                               "想继续保持锁定，无需任何操作。")
 
     # ---------- 生命周期（无人看管自动退出，每秒检查） ----------
 
@@ -482,9 +566,66 @@ class Daemon:
 
     def _auto_exit(self, reason: str):
         self.log("session", f"自动退出：{reason}")
+        self._end_reason = f"auto_exit:{reason}"
         self.emit("daemon_exit", reason=reason, state=self.sl.state.value)
         self._estop(f"auto_exit:{reason}")
         self.running = False
+
+    # ---------- 退出归档（F5 审计 / F7 多周目记忆） ----------
+
+    def _archive_outbox(self):
+        """退出前把 outbox 技术事件归档到 state/archive/session-<ts>.jsonl。
+        隐私：丢弃 intent_rp 事件，并剔除任何 text 字段——归档只含
+        设备/错误/生命周期等纯技术事件，不含对话内容。"""
+        try:
+            lines = OUTBOX.read_text(encoding="utf-8").splitlines()
+        except Exception:  # noqa: BLE001
+            return
+        kept = []
+        for ln in lines:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rec = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("event") == "intent_rp":
+                continue
+            rec.pop("text", None)
+            kept.append(json.dumps(rec, ensure_ascii=False))
+        if not kept:
+            return
+        archive = STATE_DIR / "archive"
+        archive.mkdir(parents=True, exist_ok=True)
+        path = archive / f"session-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    def _write_play_history(self):
+        """多周目记忆钩子：state/play_history.json 追加本场次纯元数据
+        （时间/ACTIVE 时长/安全词类型计数/结束原因 + 上层 meta），
+        不含任何对话内容。配置 logging.play_history=false 可关闭。"""
+        if (self.sl._config.get("logging") or {}).get("play_history") is False:
+            return
+        if not self.sl.session_start_ts:
+            return  # 未进入过 ACTIVE，无场次可记
+        rec = {
+            "ts": now_iso(),
+            "active_minutes": round(
+                (time.time() - self.sl.session_start_ts) / 60, 1),
+            "safeword_events": dict(self._safeword_events),
+            "end_reason": self._end_reason,
+        }
+        rec.update(self._session_meta)
+        path = STATE_DIR / "play_history.json"
+        try:
+            history = json.loads(path.read_text(encoding="utf-8")) \
+                if path.exists() else []
+        except Exception:  # noqa: BLE001
+            history = []
+        history.append(rec)
+        path.write_text(json.dumps(history[-50:], ensure_ascii=False, indent=2),
+                        encoding="utf-8")
 
     # ---------- 主循环 ----------
 
@@ -515,6 +656,7 @@ class Daemon:
         except Exception as e:  # noqa: BLE001
             self.emit("error", where="boot", message=str(e))
             self.log("session", f"boot 失败: {e}")
+            self._end_reason = "boot_failure"
             self.cleanup()
             return
 
@@ -553,18 +695,22 @@ class Daemon:
                 cmd = msg.get("cmd")
                 try:
                     if cmd == "ping":
-                        self.emit("pong", state=self.sl.state.value,
-                                  current=dict(self.sl.current))
+                        self.emit("pong", **self._status())
                     elif cmd == "input":
                         self.handle_input(str(msg.get("text", "")))
                     elif cmd == "device":
                         self.handle_device(msg)
+                    elif cmd == "meta":
+                        # 上层写入场次元数据（场景名等，play_history 用），纯键值
+                        self._session_meta[str(msg.get("key"))[:50]] = \
+                            str(msg.get("value"))[:100]
                     elif cmd == "authorize_start":
                         self.handle_authorize_start()
                     elif cmd == "manual_reset":
                         self.handle_manual_reset()
                     elif cmd == "shutdown":
                         self._estop("shutdown")
+                        self._end_reason = "shutdown"
                         self.log("session", "Session 结束（shutdown）")
                         self.emit("shutdown")
                         self.running = False
@@ -580,6 +726,7 @@ class Daemon:
                 try:
                     self.check_session_timeout()
                     self.check_lifecycle()
+                    self.check_lock_notices()
                 except Exception as e:  # noqa: BLE001
                     self.emit("error", where="session_timeout", message=str(e))
             time.sleep(0.2)
@@ -593,6 +740,9 @@ class Daemon:
             pass
         if self.relay:
             self.relay.stop()
+        # 退出前归档：技术事件审计（F5）+ 场次元数据（F7），均在清空前完成
+        self._archive_outbox()
+        self._write_play_history()
         # 清理 IPC 文件，对话内容不留存
         for p in (INBOX, OUTBOX):
             try:

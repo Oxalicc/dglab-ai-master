@@ -78,7 +78,7 @@
     "forbidden_waveforms": [
       "SIGNAL"
     ],
-    "_note": "全部由佩戴者自主设定。max_intensity 由佩戴者手动设定，建议从低开始逐步上调；设备 APP 内置上限独立生效。上调安全由上调预算机制保证：预算额度 = max_step_up，上调按幅度消耗、下调按幅度回补（降多少允许再升多少），预算耗尽后进入冷却，距上次上调满 step_up_cooldown_seconds 预算自动回满；起步（从 0 开到最小档）豁免。forbidden_waveforms 须使用郊狼内置波形名（见 dglab_v4_client.WAVEFORMS：BREATHING/PULSE/TIDE/RIPPLE/HEARTBEAT/SIGNAL/TEMPO_TAP 等 24 个）；注意 playbook 的惩罚峰值会用到 TEMPO_TAP/PULSATING/QUICK_RUB，禁用它们会导致峰值波形被替换为 BREATHING。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
+    "_note": "全部由佩戴者自主设定，效果化理解：max_intensity=强度天花板（100 即永不超 100 档）；min_output_intensity=最小有体感档（低于它基本无感，非零输出自动从该档起步）；max_step_up + step_up_cooldown_seconds=上调节奏（默认=每 30 秒最多升 10 档，下调多少回补多少额度，从 0 开到最小档豁免）；max_output_seconds=单次输出时长上限（超时自动停）；forbidden_waveforms 须为郊狼内置波形名（见 dglab_v4_client.WAVEFORMS 共 24 个），写错名字启动即报错；禁用 TEMPO_TAP/PULSATING/QUICK_RUB 会导致惩罚峰值被替换为 BREATHING（启动时警告）。三档预设见 assets/red_line_presets.json。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
   },
   "persona": "strict_coach",
   "custom_actions": {
@@ -114,7 +114,7 @@
       "semantic": "高潮预警",
       "hint": "RP 意图：剧情节奏线索，AI 据此调整剧本"
     },
-    "_note": "APP custom.action 映射。APP 界面显示为字母 A~J 对应编号 0~9（A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9），向佩戴者介绍时必须使用字母。A=主安全词、F=次安全词为硬编码唯一语义，不可改作他用。其余字母的反馈仅代表角色扮演意图，不代表真实意图，须经 LLM 结合剧情与人设处理；B 未定义可自设。所有字母均不产生任何控制权"
+    "_note": "APP custom.action 映射。APP 界面显示为字母 A~J 对应编号 0~9（A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9），向佩戴者介绍时必须使用字母。A=主安全词、F=次安全词为硬编码唯一语义，不可改作他用。其余字母的反馈仅代表角色扮演意图，不代表真实意图，须经 LLM 结合剧情与人设处理；B 未定义可自设。特殊类型：某个字母可配置为 {\"type\":\"lock_query\"} 成为锁定状态查询键（按下即播报当前锁定/连接状态，不参与剧情）。所有字母均不产生任何控制权"
   },
   "session_script": {
     "warmup_pct": 20,
@@ -133,7 +133,10 @@
     "_note": "郊狼 3.0（DG-LAB 4 APP）+ 官方 V4 协议栈。url 为 V4 Relay 地址（公共或用户自建）。本地 9998 等地址无服务时，由 scripts/relay_manager.py 自动拉起 Skill 内置 Relay 兜底，无需手动部署。依赖 websocket-client + websockets + qrcode[pil]，先运行 scripts/check_env.py 验证环境。"
   },
   "wearer": {
-    "age_verified_at": null
+    "age_verified_at": null,
+    "start_phrase": "开始",
+    "unlock_phrase": "确认解锁",
+    "_note": "start_phrase=显式开始口令；unlock_phrase=SAFE_LOCK 锁定期满后的解锁口令（设备无物理复位按键，口令的显式性承担防误解锁职责）。两者都必须与安全词完全不同"
   },
   "logging": {
     "record": [
@@ -144,6 +147,8 @@
     "never_record": [
       "conversation_text",
       "voice_content"
-    ]
+    ],
+    "play_history": true,
+    "_note": "play_history=true 时，Session 结束在 state/play_history.json 追加纯元数据（场次时间/ACTIVE 时长/安全词类型计数/结束原因/场景名），供 LLM 开场读取实现多周目连续性；不含任何对话内容，设 false 关闭。每次退出另将技术事件（设备/错误/生命周期）归档到 state/archive/，同样不含对话。"
   }
 }

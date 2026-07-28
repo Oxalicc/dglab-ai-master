@@ -1,0 +1,33 @@
+{
+  "温柔": {
+    "desc": "上限低、上调慢，适合新手或低耐受",
+    "effect": "最高 60 档，每 45 秒最多上调 5 档，单次输出不超过 10 秒",
+    "red_lines": {
+      "max_intensity": 60,
+      "max_step_up": 5,
+      "step_up_cooldown_seconds": 45,
+      "max_output_seconds": 10
+    }
+  },
+  "标准": {
+    "desc": "默认均衡档，大多数人的起点",
+    "effect": "最高 100 档，每 30 秒最多上调 10 档，单次输出不超过 10 秒",
+    "red_lines": {
+      "max_intensity": 100,
+      "max_step_up": 10,
+      "step_up_cooldown_seconds": 30,
+      "max_output_seconds": 10
+    }
+  },
+  "高强度": {
+    "desc": "上限高、节奏快，仅适合有经验的老手",
+    "effect": "最高 150 档，每 10 秒最多上调 15 档，单次输出不超过 15 秒",
+    "red_lines": {
+      "max_intensity": 150,
+      "max_step_up": 15,
+      "step_up_cooldown_seconds": 10,
+      "max_output_seconds": 15
+    }
+  },
+  "_note": "红线预设（F3）：bootstrap 首次向导与安全确认阶段可一键选择，选定后把 red_lines 合并写入 session_config.json（仅 IDLE 可改）。预设之外的字段（min_output_intensity、双锁时长、禁用波形等）沿用配置原值；高级用户可在预设基础上手动细调 session_config.json。desc 一句话定位，effect 为效果化描述（播报用）。"
+}

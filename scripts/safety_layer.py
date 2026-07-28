@@ -25,6 +25,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from dglab_v4_client import WAVEFORMS  # 内置波形名白名单（仅取键名，无网络依赖）
+
 
 class Intent(Enum):
     SAFE_HARD = "safe_hard"        # 主安全词：硬停止，绕过 LLM
@@ -52,7 +54,7 @@ class RedLines:
     soft_safe_intensity: int = 10     # 次安全词降级目标
     soft_lock_seconds: float = 180.0  # 次安全词后禁止上调时长
     hard_lock_seconds: float = 300.0  # 主安全词后安全锁定时长
-    forbidden_waveforms: tuple = ("extreme", "lightning")  # 禁用波形
+    forbidden_waveforms: tuple = ("SIGNAL",)  # 禁用波形（须为郊狼内置波形名）
 
 
 GENTLE_WAVEFORM = "BREATHING"  # 兜底舒缓波形（郊狼内置波形名），用于替换禁用波形与软降级
@@ -91,7 +93,7 @@ def example_config() -> dict:
             "soft_safe_intensity": 10,
             "soft_lock_seconds": 180,
             "hard_lock_seconds": 300,
-            "forbidden_waveforms": ["extreme", "lightning"],
+            "forbidden_waveforms": ["SIGNAL"],
         },
         # APP custom.action 剧情按键（界面字母 B~J，F 已占为次安全词）：
         # 语义仅代表角色扮演意图，须经 LLM 结合剧情与人设处理
@@ -138,7 +140,30 @@ def validate_config(config: dict) -> list:
             problems.append("red_lines.min_output_intensity 必须为非负数")
         elif "max_intensity" in rl and mv > rl["max_intensity"]:
             problems.append("min_output_intensity 不能大于 max_intensity")
+    unknown = [w for w in (rl.get("forbidden_waveforms") or [])
+               if w not in WAVEFORMS]
+    if unknown:
+        problems.append(
+            "forbidden_waveforms 含非内置波形名："
+            + "、".join(unknown)
+            + "（可用名见 dglab_v4_client.WAVEFORMS，共 24 个）")
     return problems
+
+
+def config_warnings(config: dict) -> list:
+    """非阻断性提醒：配置合法但可能不符合预期（启动时播报，不拒绝运行）。"""
+    warnings = []
+    rl = config.get("red_lines") or {}
+    peak = {"TEMPO_TAP", "PULSATING", "QUICK_RUB"}  # playbook 阶段三峰值波形
+    banned = sorted(set(rl.get("forbidden_waveforms") or []) & peak)
+    if banned:
+        warnings.append(
+            "禁用了惩罚峰值波形 " + "、".join(banned)
+            + "，峰值将被替换为 BREATHING，惩罚张力会明显变弱")
+    sw = config.get("safewords") or {}
+    if not (sw.get("soft") or []):
+        warnings.append("未设置次安全词：软降级路径不可用，只剩硬停止")
+    return warnings
 
 
 def _normalize(text: str) -> str:
@@ -364,13 +389,14 @@ class SafetyLayer:
         self.state = State.ACTIVE
         self.session_start_ts = now if now is not None else time.time()
 
-    def manual_reset(self, physical_confirm: bool, now: Optional[float] = None):
-        """SAFE_LOCK 唯一出口：物理确认（APP 按钮）且锁定期满。语音无效。"""
+    def manual_reset(self, now: Optional[float] = None):
+        """SAFE_LOCK 唯一出口：锁定期满 + 用户显式确认。
+        设备上没有物理复位按键——由 daemon 在锁定期满后主动询问，
+        用户说出解锁口令（wearer.unlock_phrase，默认"确认解锁"）后调用本方法。
+        口令的显式性替代物理按键承担防误唤醒职责。"""
         now = now if now is not None else time.time()
         if self.state != State.SAFE_LOCK:
             raise SafetyViolation("当前不在安全锁定状态")
-        if not physical_confirm:
-            raise SafetyViolation("必须物理手动复位，语音解锁无效")
         if now < self.lock_until:
             raise SafetyViolation(f"锁定时间未到，剩余 {int(self.lock_until - now)} 秒")
         self.state = State.IDLE
@@ -419,6 +445,18 @@ if __name__ == "__main__":
         raise SystemExit("FAIL: 缺少主安全词应拒绝运行")
     except ValueError:
         pass
+
+    # ---- 波形白名单 lint：非内置名拒绝，峰值禁用仅警告 ----
+    bad_wf = example_config()
+    bad_wf["red_lines"]["forbidden_waveforms"] = ["extreme"]  # 非内置波形名
+    assert any("forbidden_waveforms" in p for p in validate_config(bad_wf))
+    warn_cfg = example_config()
+    warn_cfg["red_lines"]["forbidden_waveforms"] = ["TEMPO_TAP"]
+    assert validate_config(warn_cfg) == []               # 合法名不阻断
+    assert any("TEMPO_TAP" in w for w in config_warnings(warn_cfg))
+    no_soft = example_config()
+    no_soft["safewords"]["soft"] = []
+    assert any("次安全词" in w for w in config_warnings(no_soft))
 
     # ---- 非 ACTIVE 拒绝下发 ----
     try:
@@ -481,7 +519,7 @@ if __name__ == "__main__":
     assert c_b5.intensity == 50                   # 冷却期满预算回满，+10
 
     # ---- 禁用波形替换 ----
-    c5 = s.clamp_command(Command(channel="B", waveform="lightning"), now=11.0)
+    c5 = s.clamp_command(Command(channel="B", waveform="SIGNAL"), now=11.0)
     assert c5.waveform == GENTLE_WAVEFORM
 
     # ---- 配置冻结：非 IDLE 禁止重载 ----
@@ -508,7 +546,7 @@ if __name__ == "__main__":
     except SafetyViolation:
         pass
 
-    # ---- 主安全词：急停 + 锁定 + 物理复位 ----
+    # ---- 主安全词：急停 + 锁定 + 期满口令解锁 ----
     acts = s.on_safe_hard(now=1000.0)
     assert s.state is State.SAFE_LOCK
     assert any(a["action"] == "clear" for a in acts)
@@ -518,16 +556,11 @@ if __name__ == "__main__":
     except SafetyViolation:
         pass
     try:
-        s.manual_reset(physical_confirm=False, now=2000.0)
-        raise SystemExit("FAIL: 非物理复位不应解锁")
-    except SafetyViolation:
-        pass
-    try:
-        s.manual_reset(physical_confirm=True, now=1001.0)
+        s.manual_reset(now=1001.0)
         raise SystemExit("FAIL: 锁定期未满不应解锁")
     except SafetyViolation:
         pass
-    s.manual_reset(physical_confirm=True, now=1000.0 + 301)
+    s.manual_reset(now=1000.0 + 301)
     assert s.state is State.IDLE
 
     # ---- IDLE 下重载配置成功，新安全词立即生效 ----

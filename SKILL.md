@@ -42,7 +42,7 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
 - **本 Skill 不处理音频采集与语音识别（STT）**。STT 是独立的上游模块，由它把语音转写为纯文本后交给本 Skill。本 Skill 的 `classify()` 接受任意来源的文本（语音转写、手动输入、其他控制器文本）。
 - 安全层 `scripts/safety_layer.py` 在链路上部署两次：**文本输入 → LLM 之前**（意图路由），**LLM → 硬件之前**（参数钳制）。
 - 设备层 `scripts/dglab_v4_client.py` 只负责"把合法指令送达设备"，无任何安全决策权。
-- 权力不对等仅存在于剧情层。物理层同意机制 = 安全词（规则层直路由）+ 非语音物理急停 + 本地红线截断，三者互为冗余。
+- 权力不对等仅存在于剧情层。物理层同意机制 = 安全词（规则层直路由）+ APP「屏蔽输出」非语音急停 + 本地红线截断，三者互为冗余。
 - 佩戴者的日常语言一律视为 RP 剧情内容；唯一例外是安全词。这要求安全词匹配"宁可误停、不可漏停"。
 
 ## 环境准备与依赖（首次使用必做）
@@ -59,8 +59,8 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
 
 安全词（含变体）、控制词表、状态查询词表、红线参数**全部来自配置文件**，代码中不写死任何具体词条：
 
-1. **首次使用**：以 `assets/session_config.example.json` 为模板，引导佩戴者逐项设定（主/次安全词及其变体、红线数值、禁用波形、人格），保存为佩戴者自己的 `session_config.json`。
-2. **加载/重载**：`SafetyLayer.from_config(path)` 或 `reload_config(path)`。`validate_config()` 会拒绝非法配置（如缺少主安全词），非法配置下系统拒绝运行。
+1. **首次使用**：以 `assets/session_config.example.json` 为模板，引导佩戴者逐项设定（主/次安全词及其变体、红线数值、禁用波形、人格），保存为佩戴者自己的 `session_config.json`。也可以直接跑 bootstrap——配置文件缺失时它会自动进入交互式配置向导（预设选择 → 主/次安全词，每步都有默认值）。红线无头绪时先用 `assets/red_line_presets.json` 的三档预设（温柔/标准/高强度），高级用户再细调。
+2. **加载/重载**：`SafetyLayer.from_config(path)` 或 `reload_config(path)`。`validate_config()` 会拒绝非法配置（缺少主安全词、红线非正数、禁用波形名不在 24 个内置波形之列），非法配置下系统拒绝运行；`config_warnings()` 给出非阻断提醒（禁用峰值波形、未设次安全词），bootstrap 安全确认阶段自动播报。
 3. **配置冻结铁律**：仅 **IDLE 状态**允许修改/重载配置；ACTIVE / SAFE_LOCK 期间 `reload_config()` 直接抛 `SafetyViolation`。Session 运行期间，LLM、剧情对话、人格都无权读写配置——防止配置被对话间接改写。
 4. **变体登记**：引导佩戴者为每个安全词登记常见误读/同音/拼写变体（`variants`），提高上游文本的命中率。匹配前做输入归一化（NFKC、小写、去标点空白）。
 
@@ -74,7 +74,7 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
 
 ## 启动检查清单（每次 Session 前执行 scripts/session_bootstrap.py）
 
-启动流程已固化为 `session_bootstrap.Bootstrap` 三阶段可执行流程，顺序不可跳，任何阶段失败都会中止并给出引导。**不要**用临时口头流程替代。
+启动流程已固化为 `session_bootstrap.Bootstrap` 可执行流程，顺序不可跳，任何阶段失败都会中止并给出引导。**不要**用临时口头流程替代。首次使用（无 `session_config.json`）会自动先走配置向导（预设 → 主/次安全词，每步有默认值），无需佩戴者先读任何文档。
 
 ### 阶段 1：设备连接检查
 
@@ -86,15 +86,15 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
 
 向佩戴者逐项播报并要求明确确认：
 1. 主安全词（立即全停）与次安全词（降至安全强度）
-2. 控制规则（红线）：强度上限、单次上调步长、上调冷却时间、单次输出时长
-3. 游戏时长（`session_max_minutes`）：佩戴者可说"时长改成 X 分钟"当场修改并写回配置（仅 IDLE 可改）
-4. 年龄验证（仅首次）。强度上限不做实测校准：由佩戴者在 `red_lines.max_intensity` 手动设定；郊狼 APP 内置的舒适/绝对上限（comfortLimit）作为硬件侧独立兜底，与本 Skill 的红线钳制互不依赖
+2. 控制规则（红线）：全部用效果化描述播报（"每 30 秒最多上调 10 档，下调回补额度""低于 30 档基本无体感，非零输出自动从 30 档起步"），不念参数名
+3. 游戏时长（`session_max_minutes`）：佩戴者可说"时长改成 X 分钟"当场修改并写回配置（仅 IDLE 可改）；也可说"换成温柔/标准/高强度预设"一键切换红线预设
+4. 年龄验证（仅首次）：缺 `age_verified_at` 时 bootstrap 当场引导确认（说"我已成年"）并写回配置，拒绝则取消 Session。强度上限不做实测校准：由佩戴者在 `red_lines.max_intensity` 手动设定；郊狼 APP 内置的舒适/绝对上限（comfortLimit）作为硬件侧独立兜底，与本 Skill 的红线钳制互不依赖
 
 ### 阶段 3：显式开始
 
 1. 逐字完整安全播报（模板内置于 `session_bootstrap.SAFETY_BRIEFING`）
 2. 播报 APP 十个按键的含义（`Bootstrap._button_briefing()`，配置驱动）：A=主安全词、F=次安全词；其余字母为剧情互动键（想要/同意/拒绝/挑衅/求饶/请求奖励/请求惩罚/高潮预警），只代表剧情意图、不产生任何控制权。介绍一律用字母，不用数字。
-3. 确认非语音急停通道可用（APP 物理按钮）
+3. 确认非语音急停通道可用（APP「屏蔽输出」开关，按下立即切断一切输出）
 4. **只有佩戴者明确说出开始口令（默认"开始"，可在配置 `wearer.start_phrase` 修改）**，才调用 `authorize_start()` 进入 ACTIVE。其他任何话语都不构成启动。
 
 ## 意图过滤层（文本输入 → LLM 之前，目标延迟 <200ms）
@@ -113,11 +113,11 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
 
 ```
 IDLE --(语音授权 + 年龄验证 + 检查清单完成)--> ACTIVE
-ACTIVE --(主安全词)--> SAFE_LOCK --(仅物理手动复位 + 锁定期满)--> IDLE
+ACTIVE --(主安全词)--> SAFE_LOCK --(锁定期满 + 用户说"确认解锁")--> IDLE
 ```
 
 - **ACTIVE**：只接受安全词、状态查询、RP 对话。一切控制类词汇走驳回模板。
-- **SAFE_LOCK**：拒绝一切输入指令（含"重新开始"），持续 `hard_lock_seconds`。唯一出口是 `manual_reset(physical_confirm=True)`——APP 物理按钮确认。防误唤醒，不可语音解锁。
+- **SAFE_LOCK**：拒绝一切输入指令（含"重新开始"），持续 `hard_lock_seconds`。设备没有物理复位按键——唯一出口是锁定期满后用户说出解锁口令（默认"确认解锁"，可在配置 `wearer.unlock_phrase` 修改），口令的显式性承担防误唤醒职责；daemon 在锁定期满时主动询问"是否解锁"，用户不答则保持锁定。**锁定期间不沉默**：任何输入都得到统一的中性指引（未届满→"锁定期满后会询问你是否解锁"；已届满→"如需解锁请说'确认解锁'"），锁定期过半与届满各自动播报一次；custom.action 里配置 `{"type":"lock_query"}` 的字母键可随时查询锁定状态。
 - **次安全词**：强度降至 ≤ `soft_safe_intensity` + 最舒缓波形（`BREATHING`），`soft_lock_seconds` 内禁止任何上调。
 - 所有词条（安全词/控制词/查询词）与时长阈值均来自配置，以上仅为语义说明。
 
@@ -150,6 +150,8 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
   daemon 自动急停退出并上报 `daemon_exit`——用户中途离开不会留下僵尸进程。
   ACTIVE 期间不因空闲退出（由总时长红线接管）。
 - 除此之外**不设任何沉默/失联自动监控**——佩戴者不说话是正常剧情状态，不是异常。
+- **状态仪表盘**：`{"cmd":"ping"}` 的 pong 返回全量状态（state/current/上调预算剩余/双锁定剩余秒/屏蔽状态/连接状态/Relay 地址/Session 剩余秒），排查与 status 回答都用它，不用翻 outbox。
+- **退出归档**：daemon 退出（shutdown/自动退出）前把 outbox 的技术事件（设备/错误/生命周期，剔除 intent_rp 与任何 text 字段）归档到 `state/archive/session-<ts>.jsonl`；另按 `logging.play_history`（默认开）向 `state/play_history.json` 追加本场次纯元数据（时间/ACTIVE 时长/安全词类型计数/结束原因/场景名——场景名由上层用 `{"cmd":"meta","key":"scenario","value":"..."}` 写入）。开场时读 play_history 可实现多周目连续性（"上次你撑到了第二阶段"），两者都不含任何对话内容。
 
 ## AI Master 控制层（剧情层，全部输出过钳制）
 
@@ -204,7 +206,7 @@ AI Master 的主导循环由 LLM 本人执行——读完场景文档后亲自�
 
 ## 日志与隐私
 
-- **只记录**：安全词触发时间戳、设备参数变更、会话起止时间。
+- **只记录**：安全词触发时间戳、设备参数变更、会话起止时间；退出归档与 play_history 只含技术事件与元数据（见「Session 结束与 daemon 生命周期」）。
 - **禁止记录**：对话文本、语音内容、任何可还原 RP 内容的信息。
 - 日志仅本地保存，会话结束时告知佩戴者日志路径。
 
@@ -222,4 +224,5 @@ AI Master 的主导循环由 LLM 本人执行——读完场景文档后亲自�
 - `references/protocol-websocket.md` — V4 协议参考（仅排查故障时读）
 - `references/scenario-design.md` — 剧本创作指南 + LLM 演绎契约（仅创作场景时读）
 - `assets/session_config.example.json` — 用户配置模板（安全词/红线全部在此设定）
+- `assets/red_line_presets.json` — 红线三档预设（温柔/标准/高强度，bootstrap 一键选择）
 - `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / defeat 败者处置，均为 Markdown 世界观设定；游戏前只读选定的一个）

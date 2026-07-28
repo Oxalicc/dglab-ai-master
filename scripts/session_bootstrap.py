@@ -25,16 +25,29 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from safety_layer import SafetyLayer, SafetyViolation, save_config, load_config
+from safety_layer import (
+    SafetyLayer, save_config, load_config, config_warnings,
+)
 
 DEFAULT_START_PHRASE = "开始"
 MAX_CONNECT_ATTEMPTS = 3
+
+PRESETS_PATH = Path(__file__).resolve().parent.parent \
+    / "assets" / "red_line_presets.json"
+
+
+def _load_presets() -> dict:
+    """红线预设（温柔/标准/高强度）。文件缺失时降级为空，预设功能静默跳过。"""
+    try:
+        return json.loads(PRESETS_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
 
 SAFETY_BRIEFING = (
     "Session 即将开始。请确认：主安全词【{hard}】会立即完全停止一切输出；"
     "次安全词【{soft}】会把强度降至安全水平。除安全词外，你的任何话语都会"
     "被视为剧情内容，不会被当作真实指令。请确认设备贴片位置正确、皮肤无破损。"
-    "你随时可以使用 APP 物理按钮急停。如感不适，立即说出安全词。"
+    "你随时可以按下 APP 的「屏蔽输出」立即切断一切输出。如感不适，立即说出安全词。"
 )
 
 
@@ -73,19 +86,27 @@ class Bootstrap:
                 url, speak=speak)
         self.relay_ensurer = relay_ensurer
         self.relay_handle = None
-        self.config = load_config(config_path)
-        self.safety = SafetyLayer(self.config)
+        # 配置缺失（首次使用）不报错：run() 先走交互式配置向导生成
+        if Path(config_path).exists():
+            self.config = load_config(config_path)
+            self.safety = SafetyLayer(self.config)
+        else:
+            self.config = None
+            self.safety = None
         self.client = None
         self.devices = []
 
     # ================= 主流程 =================
 
     def run(self) -> dict:
-        """执行完整三阶段引导，返回 ready 上下文。任何阶段失败抛 BootstrapError。"""
+        """执行完整引导，返回 ready 上下文。任何阶段失败抛 BootstrapError。"""
+        if self.config is None:
+            self._step_config_wizard()
         self._step_env()
         self._step_device_connect()
         self._step_device_verify()
         self._step_safety_review()
+        self._step_age_verify()
         self._step_final_confirm()
         return {
             "client": self.client,
@@ -93,6 +114,46 @@ class Bootstrap:
             "config": self.config,
             "safety": self.safety,
         }
+
+    # ================= 阶段零：首次配置向导 =================
+
+    def _step_config_wizard(self):
+        """首次使用：交互式生成 session_config.json。
+        安全词/预设都有默认值，说'默认'即可跳过，全程不超过一分钟。"""
+        from safety_layer import example_config
+        self.speak("首次使用，先花一分钟生成你的安全配置（每步都可说'默认'）。")
+        cfg = example_config()
+        presets = _load_presets()
+        if presets:
+            names = "、".join(presets.keys())
+            self.speak(f"① 选择强度预设：{names}。说预设名，或说'默认'用标准。")
+            answer = self.hear()
+            chosen = "标准" if "标准" in presets else next(iter(presets))
+            for name in presets:
+                if name in answer:
+                    chosen = name
+                    break
+            cfg["red_lines"].update(presets[chosen]["red_lines"])
+            self.speak(f"已选「{chosen}」：{presets[chosen]['effect']}")
+        self.speak("② 设定主安全词（触发立即全停）。避免'停下'这类日常易脱口词。"
+                   "直接说出你的主安全词，或说'默认'用【红灯】。")
+        answer = self.hear().strip()
+        if answer and "默认" not in answer:
+            cfg["safewords"]["hard"] = [{"word": answer, "variants": []}]
+        self.speak("③ 设定次安全词（降至安全强度缓一缓）。说出你的次安全词，"
+                   "说'默认'用【黄灯】，说'不要'则不设次安全词。")
+        answer = self.hear().strip()
+        if "不要" in answer:
+            cfg["safewords"]["soft"] = []
+        elif answer and "默认" not in answer:
+            cfg["safewords"]["soft"] = [{"word": answer, "variants": []}]
+        cfg["wearer"] = {"age_verified_at": None}
+        cfg.setdefault("transport", {})["url"] = "ws://127.0.0.1:9998"
+        save_config(cfg, self.config_path)
+        self.config = cfg
+        self.safety = SafetyLayer(self.config)
+        self.speak("配置已保存。以后想调整，在 IDLE 状态下修改 "
+                   "session_config.json 即可。")
 
     # ================= 阶段一：设备连接检查 =================
 
@@ -147,6 +208,10 @@ class Bootstrap:
                 raise BootstrapError("仍未检测到设备。")
         names = "、".join(d.get("name", d.get("slotId", "?")) for d in self.devices)
         self.speak(f"设备在线：{names}。")
+        # 真机实测两个必查项，漏掉任意一个都会表现为"没输出/失控"
+        self.speak("开局前请在 APP 确认两件事：① 舒适设置里关闭「自动增加」"
+                   "（否则设备会自行爬升强度，Master 失去独占控制，急停归零后还会再爬）；"
+                   "② 两个通道都没有开启「屏蔽输出」（屏蔽只能在 APP 里解除）。")
 
     # ================= 阶段二：安全确认 =================
 
@@ -154,22 +219,41 @@ class Bootstrap:
         sw = self.config.get("safewords") or {}
         hard = "、".join(e["word"] for e in sw.get("hard", []))
         soft = "、".join(e["word"] for e in sw.get("soft", [])) or "（未设置）"
+        presets = _load_presets()
+        for w in config_warnings(self.config):
+            self.speak(f"配置提醒：{w}")
         while True:
             rl = self.safety.red
             self.speak(
                 "第 2/3 阶段：安全确认。请逐项确认——\n"
                 f"① 主安全词（立即全停）：{hard}\n"
                 f"② 次安全词（降至安全强度）：{soft}\n"
-                f"③ 控制规则：强度上限 {rl.max_intensity}，"
-                f"每 {rl.step_up_cooldown_seconds:.0f} 秒最多上调 {rl.max_step_up} 档（下调可回补额度），"
-                f"单次输出 ≤{rl.max_output_seconds:.0f} 秒\n"
+                f"③ 控制规则：强度上限 {rl.max_intensity} 档，"
+                f"每 {rl.step_up_cooldown_seconds:.0f} 秒最多上调 {rl.max_step_up} 档"
+                "（下调多少就回补多少额度），"
+                f"单次输出 ≤{rl.max_output_seconds:.0f} 秒；"
+                f"低于 {rl.min_output_intensity} 档基本无体感，"
+                f"非零输出自动从 {rl.min_output_intensity} 档起步\n"
                 f"④ 游戏时长：{rl.session_max_minutes} 分钟\n"
-                "全部确认请说'确认'；修改时长请说'时长改成 X 分钟'。"
+                "全部确认请说'确认'；修改时长请说'时长改成 X 分钟'"
+                + ("；换预设请说'换成温柔/标准/高强度预设'。" if presets else "。")
             )
             answer = self.hear()
             if "确认" in answer:
                 self.speak("安全设置已确认并锁定，Session 期间不可修改。")
                 return
+            switched = False
+            for name, p in presets.items():
+                if name in answer and "预设" in answer:
+                    self.config.setdefault("red_lines", {}).update(p["red_lines"])
+                    save_config(self.config, self.config_path)
+                    self.safety.reload_config(self.config_path)
+                    self.speak(f"已换成「{name}」预设：{p['effect']}。"
+                               "请重新确认全部设置。")
+                    switched = True
+                    break
+            if switched:
+                continue
             m = re.search(r"时长改成?\s*(\d+)\s*分钟?", answer)
             if m:
                 minutes = int(m.group(1))
@@ -180,6 +264,22 @@ class Bootstrap:
                 self.speak(f"时长已改为 {minutes} 分钟。请重新确认全部设置。")
                 continue
             self.speak("没有听懂。请说'确认'，或'时长改成 X 分钟'。")
+
+    def _step_age_verify(self):
+        """年龄验证引导（仅首次）：缺 age_verified_at 时当场确认并写回配置，
+        不再让佩戴者卡在 authorize_start 的拒绝上。"""
+        w = self.config.get("wearer") or {}
+        if w.get("age_verified_at"):
+            return
+        self.speak("年龄确认：本 Session 仅面向成年用户。请确认你已年满 18 周岁、"
+                   "自愿参与、并已牢记安全词。确认请说'我已成年'。")
+        answer = self.hear()
+        if "成年" not in answer:
+            raise BootstrapError("年龄验证未通过，Session 取消。")
+        self.config.setdefault("wearer", {})["age_verified_at"] = \
+            time.strftime("%Y-%m-%dT%H:%M:%S")
+        save_config(self.config, self.config_path)
+        self.speak("年龄验证已完成（仅记录验证时间戳）。")
 
     def _update_duration(self, minutes: int):
         """IDLE 下修改时长并写回配置（reload_config 的冻结规则保障非 IDLE 不可改）。"""
@@ -324,7 +424,7 @@ if __name__ == "__main__":
     bs2.run()
     assert any("引导" in s for s in spoken)          # 失败后有连接引导
 
-    # ---- 路径 3：缺年龄验证 → 授权被拒 ----
+    # ---- 路径 3：缺年龄验证且拒绝确认 → 引导后取消 ----
     cfg_tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                           encoding="utf-8")
     bad_cfg = json.loads(json.dumps(__import__("safety_layer").example_config()))
@@ -332,7 +432,7 @@ if __name__ == "__main__":
     bad_cfg["wearer"] = {"age_verified_at": None}
     json.dump(bad_cfg, cfg_tmp, ensure_ascii=False)
     cfg_tmp.close()
-    answers3 = iter(["确认", "开始"])   # 正常走到最终授权才被拒
+    answers3 = iter(["确认", "开始"])   # 安全确认通过，年龄引导时说"开始"不算确认
     bs3 = Bootstrap(cfg_tmp.name, speak_fn=lambda s: None,
                     hear_fn=lambda: next(answers3),
                     client_factory=lambda url: FakeClient(url),
@@ -340,8 +440,56 @@ if __name__ == "__main__":
                     relay_ensurer=fake_ensurer)
     try:
         bs3.run()
-        raise SystemExit("FAIL: 未年龄验证不应通过")
-    except SafetyViolation:
-        pass  # authorize_start 拒绝，符合预期
+        raise SystemExit("FAIL: 未完成年龄确认不应通过")
+    except BootstrapError:
+        pass  # 年龄引导拒绝，符合预期
+
+    # ---- 路径 4：缺年龄验证 → 当场说"我已成年" → 写回配置并放行 ----
+    cfg4 = json.loads(json.dumps(__import__("safety_layer").example_config()))
+    cfg4["transport"] = {"url": "ws://x"}
+    cfg4["wearer"] = {"age_verified_at": None}
+    tmp4 = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                       encoding="utf-8")
+    json.dump(cfg4, tmp4, ensure_ascii=False)
+    tmp4.close()
+    spoken.clear()
+    answers4 = iter(["确认", "我已成年", "开始"])
+    bs4 = Bootstrap(tmp4.name, speak_fn=spoken.append,
+                    hear_fn=lambda: next(answers4),
+                    client_factory=lambda url: FakeClient(url),
+                    env_checker=lambda: True,
+                    relay_ensurer=fake_ensurer)
+    bs4.run()
+    saved4 = json.loads(open(tmp4.name, encoding="utf-8").read())
+    assert saved4["wearer"]["age_verified_at"]     # 时间戳已写回配置
+    assert any("年龄确认" in s for s in spoken)    # 有引导而非直接拒绝
+
+    # ---- 路径 5：首次使用 → 配置向导生成配置 ----
+    import os as _os
+    wiz_path = _os.path.join(tempfile.mkdtemp(), "session_config.json")
+    spoken.clear()
+    answers5 = iter(["默认",          # 预设：标准
+                     "菠萝",          # 自定义主安全词
+                     "不要",          # 不设次安全词
+                     "确认", "我已成年", "开始"])
+    bs5 = Bootstrap(wiz_path, speak_fn=spoken.append,
+                    hear_fn=lambda: next(answers5),
+                    client_factory=lambda url: FakeClient(url),
+                    env_checker=lambda: True,
+                    relay_ensurer=fake_ensurer)
+    ctx5 = bs5.run()
+    assert ctx5["safety"].state.name == "ACTIVE"
+    wiz_cfg = json.loads(open(wiz_path, encoding="utf-8").read())
+    assert wiz_cfg["safewords"]["hard"] == [{"word": "菠萝", "variants": []}]
+    assert wiz_cfg["safewords"]["soft"] == []
+    assert wiz_cfg["red_lines"]["max_intensity"] == 100   # 标准预设
+    assert any("首次使用" in s for s in spoken)
+
+    # ---- 路径 6：安全确认阶段换预设 ----
+    spoken.clear()
+    bs6 = make_bootstrap(["换成温柔预设", "确认", "开始"])
+    bs6.run()
+    assert bs6.safety.red.max_intensity == 60       # 温柔预设生效
+    assert any("温柔" in s for s in spoken)
 
     print("session_bootstrap self-test OK: all assertions passed")
