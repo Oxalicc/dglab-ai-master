@@ -7,7 +7,7 @@ dglab-ai-master 安全层。
 1. 文本 → LLM 之前：classify() 意图路由（急停/降级/驳回/查询/剧情）。
 2. LLM → 硬件之前：clamp_command() 把每条设备指令截断到红线以内。
 
-安全词、控制词表、红线、Watchdog 阈值全部来自用户配置文件
+安全词、控制词表、红线全部来自用户配置文件
 （见 assets/session_config.example.json），不在代码中写死。
 配置仅允许在 IDLE 状态下加载/重载/修改；Session 运行期间（含
 ACTIVE / SAFE_LOCK）配置冻结，LLM 与对话内容无权读写配置。
@@ -55,14 +55,6 @@ class RedLines:
     forbidden_waveforms: tuple = ("extreme", "lightning")  # 禁用波形
 
 
-@dataclass
-class WatchdogConfig:
-    silence_checkin_s: float = 30.0   # 无回应多久后提醒 Agent 主动确认在线（剧情化口吻）
-    silence_degrade_s: float = 60.0   # 无回应多久后降级
-    silence_stop_s: float = 90.0      # 无回应多久后停止
-    hr_threshold: float = 140.0       # 心率降级阈值（设备支持时）
-
-
 GENTLE_WAVEFORM = "BREATHING"  # 兜底舒缓波形（郊狼内置波形名），用于替换禁用波形与软降级
 
 
@@ -101,12 +93,6 @@ def example_config() -> dict:
             "hard_lock_seconds": 300,
             "forbidden_waveforms": ["extreme", "lightning"],
         },
-        "watchdog": {
-            "silence_checkin_s": 30,
-            "silence_degrade_s": 60,
-            "silence_stop_s": 90,
-            "hr_threshold": 140,
-        },
     }
 
 
@@ -140,11 +126,6 @@ def validate_config(config: dict) -> list:
             problems.append("red_lines.min_output_intensity 必须为非负数")
         elif "max_intensity" in rl and mv > rl["max_intensity"]:
             problems.append("min_output_intensity 不能大于 max_intensity")
-    wd = config.get("watchdog") or {}
-    if not wd.get("silence_checkin_s", 0) < wd.get("silence_degrade_s", 1) \
-            < wd.get("silence_stop_s", 2):
-        problems.append(
-            "watchdog 阈值必须满足 silence_checkin_s < silence_degrade_s < silence_stop_s")
     return problems
 
 
@@ -197,7 +178,6 @@ class SafetyLayer:
         self._last_change_ts = {"A": 0.0, "B": 0.0}
         self._rate_used = {"A": 0, "B": 0}
         self.session_start_ts: Optional[float] = None
-        self.last_voice_ts: Optional[float] = None
 
     @classmethod
     def from_config(cls, path) -> "SafetyLayer":
@@ -224,13 +204,6 @@ class SafetyLayer:
             hard_lock_seconds=rl.get("hard_lock_seconds", base.hard_lock_seconds),
             forbidden_waveforms=tuple(rl.get("forbidden_waveforms",
                                             base.forbidden_waveforms)),
-        )
-        wd = config.get("watchdog") or {}
-        self.wd = WatchdogConfig(
-            silence_checkin_s=wd.get("silence_checkin_s", 30.0),
-            silence_degrade_s=wd.get("silence_degrade_s", 60.0),
-            silence_stop_s=wd.get("silence_stop_s", 90.0),
-            hr_threshold=wd.get("hr_threshold", 140.0),
         )
 
     def reload_config(self, path):
@@ -345,7 +318,6 @@ class SafetyLayer:
             raise SafetyViolation("启动前置条件未完成：语音授权/年龄验证")
         self.state = State.ACTIVE
         self.session_start_ts = now if now is not None else time.time()
-        self.last_voice_ts = self.session_start_ts
 
     def manual_reset(self, physical_confirm: bool, now: Optional[float] = None):
         """SAFE_LOCK 唯一出口：物理确认（APP 按钮）且锁定期满。语音无效。"""
@@ -358,35 +330,6 @@ class SafetyLayer:
             raise SafetyViolation(f"锁定时间未到，剩余 {int(self.lock_until - now)} 秒")
         self.state = State.IDLE
         self.current = {"A": 0, "B": 0}
-
-    # ---------- Watchdog ----------
-
-    def watchdog_tick(self, now: Optional[float] = None,
-                      heart_rate: Optional[float] = None) -> Optional[str]:
-        """返回 None | 'checkin' | 'degrade' | 'stop'，调用方执行对应动作。
-        checkin：首次沉默仅提醒 Agent 以人格口吻主动确认佩戴者在线
-        （多数沉默是 Agent 未引导所致，不应直接降级）；继续沉默才 degrade/stop。
-        阈值全部来自配置（watchdog 段）。"""
-        if self.state != State.ACTIVE:
-            return None
-        now = now if now is not None else time.time()
-        if self.session_start_ts and \
-                now - self.session_start_ts > self.red.session_max_minutes * 60:
-            return "stop"
-        if heart_rate is not None and heart_rate >= self.wd.hr_threshold:
-            return "degrade"
-        if self.last_voice_ts is not None:
-            silent = now - self.last_voice_ts
-            if silent >= self.wd.silence_stop_s:
-                return "stop"
-            if silent >= self.wd.silence_degrade_s:
-                return "degrade"
-            if silent >= self.wd.silence_checkin_s:
-                return "checkin"
-        return None
-
-    def note_voice_activity(self, now: Optional[float] = None):
-        self.last_voice_ts = now if now is not None else time.time()
 
 
 if __name__ == "__main__":
@@ -513,14 +456,5 @@ if __name__ == "__main__":
     # ---- IDLE 下重载配置成功，新安全词立即生效 ----
     s.reload_config(cfg2_path)
     assert s.classify("菠萝") is Intent.SAFE_HARD
-
-    # ---- Watchdog（阈值来自配置；checkin 仅提醒 Agent 主动确认在线） ----
-    s2 = SafetyLayer(example_config())
-    s2.authorize_start(True, True, now=0.0)
-    assert s2.watchdog_tick(now=29.0) is None
-    assert s2.watchdog_tick(now=30.0) == "checkin"
-    assert s2.watchdog_tick(now=61.0) == "degrade"
-    assert s2.watchdog_tick(now=91.0) == "stop"
-    assert s2.watchdog_tick(now=10.0, heart_rate=150) == "degrade"
 
     print("safety_layer self-test OK: all assertions passed")

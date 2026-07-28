@@ -13,7 +13,7 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
   此阶段可以也应该处理技术问题，但只讲用户能操作的事
   （"请扫码""请在 APP 关闭自动增加"），不讲协议原理。
 - **游戏阶段**（Session 开始口令之后）：**纯剧情主导**。安全层、钳制、
-  Watchdog、Relay 全部静默运行——佩戴者只面对 AI Master 的人格与剧情，
+  Relay 全部静默运行——佩戴者只面对 AI Master 的人格与剧情，
   不向佩戴者暴露任何技术术语（协议、增量、估值、事件名、日志路径）。
   设备事件翻译成佩戴者语言：屏蔽 → "请在 APP 里「解除屏蔽输出」"；
   断连 → "APP 掉线了，请保持屏幕常亮重新扫码"。
@@ -24,7 +24,7 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
 - **本 Skill 不处理音频采集与语音识别（STT）**。STT 是独立的上游模块，由它把语音转写为纯文本后交给本 Skill。本 Skill 的 `classify()` 接受任意来源的文本（语音转写、手动输入、其他控制器文本）。
 - 安全层 `scripts/safety_layer.py` 在链路上部署两次：**文本输入 → LLM 之前**（意图路由），**LLM → 硬件之前**（参数钳制）。
 - 设备层 `scripts/dglab_v4_client.py` 只负责"把合法指令送达设备"，无任何安全决策权。
-- 权力不对等仅存在于剧情层。物理层同意机制 = 安全词（规则层直路由）+ 非语音物理急停 + 本地红线截断 + Watchdog，四者互为冗余。
+- 权力不对等仅存在于剧情层。物理层同意机制 = 安全词（规则层直路由）+ 非语音物理急停 + 本地红线截断，三者互为冗余。
 - 佩戴者的日常语言一律视为 RP 剧情内容；唯一例外是安全词。这要求安全词匹配"宁可误停、不可漏停"。
 
 ## 环境准备与依赖（首次使用必做）
@@ -39,9 +39,9 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
 
 ## 配置系统（用户自主设定，非硬编码）
 
-安全词（含变体）、控制词表、状态查询词表、红线参数、Watchdog 阈值**全部来自配置文件**，代码中不写死任何具体词条：
+安全词（含变体）、控制词表、状态查询词表、红线参数**全部来自配置文件**，代码中不写死任何具体词条：
 
-1. **首次使用**：以 `assets/session_config.example.json` 为模板，引导佩戴者逐项设定（主/次安全词及其变体、红线数值、禁用波形、Watchdog 阈值、人格），保存为佩戴者自己的 `session_config.json`。
+1. **首次使用**：以 `assets/session_config.example.json` 为模板，引导佩戴者逐项设定（主/次安全词及其变体、红线数值、禁用波形、人格），保存为佩戴者自己的 `session_config.json`。
 2. **加载/重载**：`SafetyLayer.from_config(path)` 或 `reload_config(path)`。`validate_config()` 会拒绝非法配置（如缺少主安全词），非法配置下系统拒绝运行。
 3. **配置冻结铁律**：仅 **IDLE 状态**允许修改/重载配置；ACTIVE / SAFE_LOCK 期间 `reload_config()` 直接抛 `SafetyViolation`。Session 运行期间，LLM、剧情对话、人格都无权读写配置——防止配置被对话间接改写。
 4. **变体登记**：引导佩戴者为每个安全词登记常见误读/同音/拼写变体（`variants`），提高上游文本的命中率。匹配前做输入归一化（NFKC、小写、去标点空白）。
@@ -99,7 +99,7 @@ ACTIVE --(主安全词)--> SAFE_LOCK --(仅物理手动复位 + 锁定期满)-->
 LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`：
 
 - `max_intensity` 绝对上限截断
-- `min_output_intensity` 最小有效输出档（默认 30）：低档位无体感，非零目标自动抬到该档（0=关闭除外）；起步（从 0 开到最小档）允许直达、豁免步长/速率限制；**安全路径豁免**——次安全词降级、Watchdog 降级、急停归零不受此限
+- `min_output_intensity` 最小有效输出档（默认 30）：低档位无体感，非零目标自动抬到该档（0=关闭除外）；起步（从 0 开到最小档）允许直达、豁免步长/速率限制；**安全路径豁免**——次安全词降级、急停归零不受此限
 - 单次上调 ≤ `max_step_up`；同秒窗口累计增长 ≤ `max_rate_per_sec`
 - 单次连续输出 ≤ `max_output_seconds`，超时自动清零
 - 命中 `forbidden_waveforms` 的波形替换为 `BREATHING`
@@ -110,15 +110,18 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 
 即使 LLM 幻觉输出异常数值，硬件只会收到截断后的合法值。**绝不允许把 LLM 原始输出直接透传给设备。**
 
-## Watchdog（ACTIVE 期间周期性调用 `watchdog_tick()`）
+## Session 结束与 daemon 生命周期
 
-阈值全部来自配置的 `watchdog` 段（必须满足 checkin < degrade < stop）：
-
-- 佩戴者无文本/语音活动超过 `silence_checkin_s` → `checkin`：**不降级、不惩罚**。多数沉默是 Agent 未主动引导所致，此时 Agent 应以当前人格口吻主动确认佩戴者在线（剧情化表达，不点破机制；daemon 上报 `watchdog_checkin` 事件）
-- 仍无回应累计超过 `silence_degrade_s` → `degrade`：强度减半并询问状态
-- 累计超过 `silence_stop_s` 仍无回应 → `stop`：完全停止并转入锁定流程
-- 心率（若设备支持）≥ `hr_threshold` → `degrade`
-- Session 总时长达到 `session_max_minutes` → 自动缓释并结束
+- **正常结束**：用户表示结束/离开时，向 daemon 发送 `{"cmd":"shutdown"}`——
+  急停、清理 IPC、关闭自建 Relay、退出进程。**不要**让对话结束而 daemon 悬留。
+- **Session 总时长上限（红线）**：ACTIVE 期间 daemon 每秒检查
+  `session_max_minutes`，到点自动急停缓释、回到 IDLE 并上报 `session_timeout`。
+- **无人看管自动退出**（阈值在配置 `"daemon"` 段可调）：
+  被控方断连超过 `detached_shutdown_s`（默认 300s）、或非 ACTIVE 状态空闲
+  超过 `idle_shutdown_s`（默认 600s，任何命令/APP 侧事件都刷新计时），
+  daemon 自动急停退出并上报 `daemon_exit`——用户中途离开不会留下僵尸进程。
+  ACTIVE 期间不因空闲退出（由总时长红线接管）。
+- 除此之外**不设任何沉默/失联自动监控**——佩戴者不说话是正常剧情状态，不是异常。
 
 ## AI Master 控制层（剧情层，全部输出过钳制）
 
@@ -170,7 +173,7 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 
 ## 日志与隐私
 
-- **只记录**：安全词触发时间戳、设备参数变更、Watchdog 事件、会话起止时间。
+- **只记录**：安全词触发时间戳、设备参数变更、会话起止时间。
 - **禁止记录**：对话文本、语音内容、任何可还原 RP 内容的信息。
 - 日志仅本地保存，会话结束时告知佩戴者日志路径。
 
@@ -179,14 +182,14 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 - `scripts/check_env.py` — 环境依赖验证与安装请求（含 venv 回退），含 `--install` / `--venv`
 - `scripts/relay_manager.py` — Relay 探测与自建兜底（无服务自动拉起内置 Relay），含 `__main__` 自测
 - `scripts/dglab_v4_relay.py` — 自建 V4 Relay 服务（官方 v4-server 的 Python 等价实现），`--self-test` 联调自测
-- `scripts/safety_layer.py` — 安全层（配置驱动：意图分类、钳制、FSM、Watchdog），含 `__main__` 自测
+- `scripts/safety_layer.py` — 安全层（配置驱动：意图分类、钳制、FSM），含 `__main__` 自测
 - `scripts/dglab_v4_client.py` — 郊狼 3.0 V4 协议客户端（含 24 个内置波形库），含 `__main__` 离线自测
 - `scripts/scenario_engine.py` — 情景对话引擎（场景驱动 + 互动原语 + LLM 可插拔），含 `__main__` 自测
 - `scripts/session_bootstrap.py` — 启动三阶段引导（设备连接检查/安全确认/显式开始），含 `__main__` 自测
-- `scripts/session_daemon.py` — Session 守护进程（常驻持有设备连接，唯一接触硬件；inbox/outbox JSON-lines IPC；屏蔽检测、Watchdog 执行、custom.action 路由）
+- `scripts/session_daemon.py` — Session 守护进程（常驻持有设备连接，唯一接触硬件；inbox/outbox JSON-lines IPC；屏蔽检测、Session 超时执行、custom.action 路由）
 - `references/protocol-websocket.md` — V4 协议参考
 - `references/personas.md` — AI Master 人格模板
 - `references/playbook.md` — 郊狼使用技巧（三阶段设备技法）与话术引导（语义模板）
 - `references/scenario-design.md` — 剧本创作指南 + LLM 提示词契约
-- `assets/session_config.example.json` — 用户配置模板（安全词/红线/Watchdog 全部在此设定）
+- `assets/session_config.example.json` — 用户配置模板（安全词/红线全部在此设定）
 - `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / defeat 战败）

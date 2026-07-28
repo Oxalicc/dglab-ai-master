@@ -81,12 +81,6 @@
     ],
     "_note": "全部由佩戴者自主设定。max_intensity 由佩戴者手动设定，建议从低开始逐步上调；设备 APP 内置上限独立生效。forbidden_waveforms 须使用郊狼内置波形名（见 dglab_v4_client.WAVEFORMS：BREATHING/PULSE/TIDE/RIPPLE/HEARTBEAT/SIGNAL/TEMPO_TAP 等 24 个）。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
   },
-  "watchdog": {
-    "silence_checkin_s": 30,
-    "silence_degrade_s": 60,
-    "silence_stop_s": 90,
-    "hr_threshold": 140
-  },
   "persona": "strict_coach",
   "custom_actions": {
     "1": {
@@ -129,6 +123,11 @@
     "peak_pct": 35,
     "cooldown_pct": 15
   },
+  "daemon": {
+    "idle_shutdown_s": 600,
+    "detached_shutdown_s": 300,
+    "_note": "daemon 生命周期：非 ACTIVE 空闲超过 idle_shutdown_s、或被控方断连超过 detached_shutdown_s，自动急停退出，不遗留进程"
+  },
   "transport": {
     "mode": "websocket_v4",
     "url": "ws://127.0.0.1:9998",
@@ -141,7 +140,6 @@
     "record": [
       "safeword_events",
       "param_changes",
-      "watchdog_events",
       "session_start_end"
     ],
     "never_record": [
