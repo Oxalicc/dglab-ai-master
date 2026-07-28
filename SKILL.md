@@ -19,6 +19,24 @@ description: 以 AI "Master" 人格自主控制 DGLAB 郊狼 3.0（Coyote 3.0，
   断连 → "APP 掉线了，请保持屏幕常亮重新扫码"。
   技术排查只在连接失败/设备异常时进行，解决后立即回到剧情。
 
+## 阅读计划与 token 纪律
+
+按需阅读，**不读与当前阶段无关的任何文件**。脚本体量大（合计近 100KB），
+读源码是最大的 token 浪费——脚本行为以本文档描述为准，一律命令行调用。
+
+- **准备阶段**：只读本文档；首次配置时加读 `assets/session_config.example.json`。
+- **进入游戏前**（一次性读完，整场不再打开任何文件）：
+  `references/personas.md` 中选定人格的条目、`references/playbook.md`、
+  选定的一个场景文件。
+- **仅创作/修改场景时**才读 `references/scenario-design.md`。
+- **仅连接/设备故障排查时**才读 `references/protocol-websocket.md`、
+  脚本源码、`state/` 日志，排查完立即停手。
+- **游戏阶段禁止**：读源码、读日志、跑 `__main__` 自测、重复 env 检查、
+  翻协议文档。工具调用只剩两种——向 daemon inbox 写命令
+  （input/device/shutdown）、读 daemon outbox 事件。
+- **思考留给剧情**：准备阶段的说明压缩成用户可操作的步骤；
+  游戏阶段不再复述技术判断过程，输出就是人格台词。
+
 ## 模块边界
 
 - **本 Skill 不处理音频采集与语音识别（STT）**。STT 是独立的上游模块，由它把语音转写为纯文本后交给本 Skill。本 Skill 的 `classify()` 接受任意来源的文本（语音转写、手动输入、其他控制器文本）。
@@ -179,7 +197,7 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 - **禁止记录**：对话文本、语音内容、任何可还原 RP 内容的信息。
 - 日志仅本地保存，会话结束时告知佩戴者日志路径。
 
-## 文件导航
+## 文件导航（阅读时机见「阅读计划与 token 纪律」）
 
 - `scripts/check_env.py` — 环境依赖验证与安装请求（含 venv 回退），含 `--install` / `--venv`
 - `scripts/relay_manager.py` — Relay 探测与自建兜底（无服务自动拉起内置 Relay），含 `__main__` 自测
@@ -188,9 +206,9 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 - `scripts/dglab_v4_client.py` — 郊狼 3.0 V4 协议客户端（含 24 个内置波形库），含 `__main__` 离线自测
 - `scripts/session_bootstrap.py` — 启动三阶段引导（设备连接检查/安全确认/显式开始），含 `__main__` 自测
 - `scripts/session_daemon.py` — Session 守护进程（常驻持有设备连接，唯一接触硬件；inbox/outbox JSON-lines IPC；屏蔽检测、Session 超时执行、custom.action 路由）
-- `references/protocol-websocket.md` — V4 协议参考
-- `references/personas.md` — AI Master 人格模板
-- `references/playbook.md` — 郊狼使用技巧（三阶段设备技法）与话术引导（语义模板）
-- `references/scenario-design.md` — 剧本创作指南 + LLM 演绎契约
+- `references/personas.md` — AI Master 人格模板（游戏前读选定条目）
+- `references/playbook.md` — 郊狼使用技巧与话术引导（游戏前必读）
+- `references/protocol-websocket.md` — V4 协议参考（仅排查故障时读）
+- `references/scenario-design.md` — 剧本创作指南 + LLM 演绎契约（仅创作场景时读）
 - `assets/session_config.example.json` — 用户配置模板（安全词/红线全部在此设定）
-- `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / defeat 败者处置，均为 Markdown 世界观设定）
+- `assets/scenarios/` — 示例场景（training_course 训练课程 / interrogation 审讯室 / defeat 败者处置，均为 Markdown 世界观设定；游戏前只读选定的一个）
