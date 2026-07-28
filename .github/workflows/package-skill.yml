@@ -3,14 +3,8 @@ name: Package Skill
 on:
   push:
     branches: [main, master]
-    paths:
-      - "SKILL.md"
-      - "assets/**"
-      - "references/**"
-      - "scripts/**"
-      - ".github/workflows/package-skill.yml"
-  push_tags:
-    - "v*"
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
