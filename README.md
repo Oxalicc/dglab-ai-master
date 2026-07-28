@@ -1,70 +1,70 @@
 # DGLAB AI Master
 
-> 测试版（Beta），锐意开发中。欢迎提 Issue、交 PR，或者单纯来聊聊。
+> 还在 Beta 哦，随时改的那种。有 bug 或者建议尽管灌满我，人家扛得住捏(｡•̀ᴗ-)✧
 
-让 AI Master 人格接管你的 DG-LAB 郊狼 3.0（Coyote 3.0 / DG-LAB 4 APP），开启一场沉浸式角色扮演 Session。控制权交给 AI，安全词永远留在你手里。
+呐，想过让 AI 扮演 Master 接管你的郊狼 3.0 吗？这个 skill 就是干这个的。控制权交出去，但安全词永远攥在你自己手里，这点没得商量捏。
 
 ## 下载
 
-👉 **[点击下载 dglab-ai-master.skill（v1.0.0）](https://github.com/Oxalicc/dglab-ai-master/releases/download/v1.0.0/dglab-ai-master.skill)**
+👉 **[点我下载 dglab-ai-master.skill（v1.0.0）](https://github.com/Oxalicc/dglab-ai-master/releases/download/v1.0.0/dglab-ai-master.skill)**
 
-其他版本见 [Releases 页面](https://github.com/Oxalicc/dglab-ai-master/releases)。`.skill` 本质上是个 zip 压缩包，不用解压，直接交给 AI 安装。
+想要别的版本就去 [Releases](https://github.com/Oxalicc/dglab-ai-master/releases) 翻。下下来的 `.skill` 不用解压，直接丢给 AI 就行啦。
 
-## 它是什么
+## 这是啥呀
 
-一个可以装进本地 AI Agent 应用的 Skill 技能包。装上之后，对 AI 说一句"启动 dglab 主控 session"，AI 就会：
+简单说，一个装进 AI 应用里的技能包。装好之后跟 AI 说一句"启动 dglab 主控 session"，它就会：
 
-- 带你走完安全确认（安全词、强度红线、时长，全部说人话）
-- 生成二维码，用 DG-LAB 4 APP 一扫即连
-- 以 Master 人格临场演绎剧情，倒计时、忍耐考核、奖惩裁决每一局都不一样
-- 全程被双向安全防线盯着——喊出安全词，绕开 AI 直送急停，宁可误停，绝不漏停
+- 先拉着你把安全词、强度上限、时长一条条确认完，说的都是人话，不糊弄
+- 变出一个二维码，拿 DG-LAB 4 APP 扫一下就连上设备了
+- 然后你的 Master 上线开始调教，现场编剧情。倒计时、忍耐考核、发落奖惩，每局都不一样，没有剧本
+- 全程有人盯着底线。你喊安全词，根本不过 AI 的脑子，直接急停。宁可误停，绝不漏停
 
-**你需要准备**：郊狼 3.0 设备 🐺 + 手机上的 DG-LAB 4 APP + 电脑上的本地 AI Agent 应用（如 Kimi 桌面版）。网页版聊天 AI 装不了 Skill，用不了。
+要准备的东西：郊狼 3.0 🐺、手机装好 DG-LAB 4 APP、电脑上有个支持 skill 的 AI 应用（比如 Kimi 桌面版）。网页版不行的哦，它没手没脚，碰不到你的设备。
 
-## 安装 / 导入
+## 怎么装
 
-> 第一次接触 Skill？强烈建议先读 [新手安装问答](https://github.com/Oxalicc/dglab-ai-master/wiki/Install-FAQ)，三分钟搞懂 Skill、平台、环境的关系。
+> 完全没玩过 skill 的杂鱼～❤ 先去读这个：[新手安装问答](https://github.com/Oxalicc/dglab-ai-master/wiki/Install-FAQ)，三分钟保你搞明白。
 
-三步走，全程用人话指挥 AI，不用碰命令行：
+三步，全程动嘴不动手：
 
-1. **装平台**：下载安装支持 Skill 的本地 Agent 应用（如 **Kimi 桌面版**），登录
-2. **装 Skill**：在聊天里告诉 AI——"我在 ~/下载/dglab-ai-master.skill 下载了一个 skill，帮我安装"
-3. **装环境**：再对 AI 说——"帮我检查这个 skill 的运行环境，缺什么装什么"。看到"环境就绪"就完成了
+1. 装个桌面版的 AI 应用，登录
+2. 跟它说："我下载了一个 skill 在 ~/下载/dglab-ai-master.skill ，帮我安装"
+3. 启动～，如果 skill 缺运行环境，全程自主安装（可能需要得到你的允许），看到"环境就绪"就好了
 
-装完后新开一个对话，说"启动 dglab 主控 session"，按向导走完安全确认、扫码连接，等你明确说"开始"才进入正片。
+装完开个新对话，喊"启动 dglab 主控 session开始角色扮演"，跟着向导走。它说"开始"才算开始，你不说它不动，超乖的。
 
-## 使用前必读（安全）
+## 玩之前给我看完（认真脸）
 
-- 本 Skill 涉及真实电刺激设备，**仅供成年用户用于双方自愿同意的角色扮演情景**
-- 安全词是你最后的防线，但你不是只有这最后一道：APP 按钮（A 键主安全词 / F 键次安全词）、APP「屏蔽输出」开关、本地红线截断，一个失效还有别的
-- 强度从最低开始，随时保持你能直接断电 / 摘设备
-- APP 息屏会断连，请保持屏幕常亮；APP 端「自动增加」记得手动关掉
+- 这是真实的电刺激设备，**成年人、自愿、角色扮演**，三个条件缺一个都别碰
+- 安全词是你最后的防线，但不是唯一的。APP 上 A 键等于主安全词，F 键等于次安全词，还有「屏蔽输出」开关和本地红线截断兜底
+- 从最低档开始玩，手永远放在能断电、能摘设备的地方
+- 手机别息屏，息屏会断连。APP 里那个「自动增加」也记得关掉
 
-## 找到作者
+## 找作者玩
 
 - Email: oxalics@qq.com
 - QQ: 793787351
 
-有 bug 要报、有剧本要投、或者单纯想聊聊郊狼玩法，随便加，不用客气。
+报 bug、投稿剧本、聊郊狼玩法都行，直接加，别客气～
 
-## 开发者 / 贡献者
+## 想改代码的这边走
 
-运行架构、安全设计、模块说明、场景创作指南、贡献规范都已移入 Wiki：
+技术向的东西都搬去 Wiki 了，README 不放这些吓人的：
 
 📖 **[DGLAB AI Master Wiki](https://github.com/Oxalicc/dglab-ai-master/wiki)**
 
-- [开发者指南](https://github.com/Oxalicc/dglab-ai-master/wiki/Developer-Guide) — 架构、状态机、项目结构、已知限制
-- [安全设计](https://github.com/Oxalicc/dglab-ai-master/wiki/Safety-Design) — 七道防线的完整说明
-- [参与贡献](https://github.com/Oxalicc/dglab-ai-master/wiki/Contributing) — Issue / PR / 写剧本 / 当小白鼠
+- [开发者指南](https://github.com/Oxalicc/dglab-ai-master/wiki/Developer-Guide)：架构、状态机、项目结构
+- [安全设计](https://github.com/Oxalicc/dglab-ai-master/wiki/Safety-Design)：七道防线到底是怎么叠的
+- [参与贡献](https://github.com/Oxalicc/dglab-ai-master/wiki/Contributing)：提 Issue、交 PR、写剧本的规矩
 
-## 项目动态
+## 在画的大饼
 
 | 计划 | 状态 | 说明 |
 |------|------|------|
-| 负鼠（Possum）支持 | 规划中 | 与郊狼并列接入 |
-| 多设备自动识别 | 规划中 | 插上自动识别型号与协议 |
-| 多平台 agent 适配 | 进行中 | 目前已测试 Kimi，欢迎反馈其他平台表现 |
+| 负鼠（Possum）支持 | 规划中 | 跟郊狼并排接进来 |
+| 多设备自动识别 | 规划中 | 插上自己认型号 |
+| 多平台 agent 适配 | 进行中 | 目前只测过 Kimi，其他平台等反馈 |
 
 ---
 
-*安全词机制再完善，也不能替代现实中的沟通与信任。Play safe, have fun.*
+*安全词机制做得再好，也替代不了现实中的沟通和信任。Play safe, have fun.* 🐺
