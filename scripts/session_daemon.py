@@ -23,7 +23,7 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   intent_status / intent_rp / custom_action / device_event /
   device_applied / device_rejected /
   waiting_reattach / client_attached(reattach) / client_detached /
-  watchdog_checkin / watchdog_degrade / watchdog_stop / session_timeout / locked /
+  session_timeout / daemon_exit / locked /
   reset_ok / shutdown / error / pong
 
 安全不变量（本进程内强制，不依赖上层）：
@@ -33,8 +33,10 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   - 「屏蔽输出」为 APP 本地功能（用户确认），协议无法解除（实测 t:5 被拒）；
     检测到 isMuted:true 只提示佩戴者在 APP 中「解除屏蔽输出」。
   - 每条 device 命令强制过 clamp_command；SafetyViolation 一律丢弃。
-  - ACTIVE 期间每秒 watchdog_tick；degrade/stop 自动执行物理动作。
-  - 日志只记安全词时间戳/参数变更/Watchdog 事件/会话起止，不记对话文本。
+  - ACTIVE 期间每秒检查 Session 总时长，到点自动缓释并结束。
+  - 生命周期：被控方断连超时（默认 300s）或非 ACTIVE 空闲超时
+    （默认 600s，配置 "daemon" 段可调）自动急停退出，不遗留进程。
+  - 日志只记安全词时间戳/参数变更/会话起止，不记对话文本。
   - inbox 每轮处理后清空已处理行，对话内容不持久化。
 """
 from __future__ import annotations
@@ -58,7 +60,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from safety_layer import (  # noqa: E402
     SafetyLayer, SafetyViolation, Command, Intent, State,
-    GENTLE_WAVEFORM,
 )
 from dglab_v4_client import DglabV4Client, DglabV4Error  # noqa: E402
 import relay_manager  # noqa: E402
@@ -78,9 +79,14 @@ class Daemon:
         self.relay = None
         self.slot_ids: list = []
         self.running = True
-        self._wd_degraded = False  # 每次失联只降级一次
-        self._wd_checkin = False   # 每次失联只提醒一次在线确认
         self.shielded = {"A": False, "B": False}  # APP 侧「屏蔽输出」状态跟踪
+        # 生命周期：无人看管时自动退出（对话结束/用户离开/APP 断连），
+        # 阈值可在配置 "daemon" 段调整
+        dg = (self.sl._config.get("daemon") or {})
+        self.idle_shutdown_s = float(dg.get("idle_shutdown_s", 600))
+        self.detached_shutdown_s = float(dg.get("detached_shutdown_s", 300))
+        self.last_activity = time.time()   # 任何命令/设备事件/接入都刷新
+        self._detached_since = None        # 被控方断连起点（boot 前不跟踪）
 
     # ---------- 输出 ----------
 
@@ -91,7 +97,7 @@ class Daemon:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     def log(self, kind: str, detail: str):
-        """安全日志：只记安全词/参数变更/Watchdog/起止，不记对话。"""
+        """安全日志：只记安全词/参数变更/起止，不记对话。"""
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(f"{now_iso()}\t{kind}\t{detail}\n")
 
@@ -173,6 +179,7 @@ class Daemon:
             return False
         self.emit("client_attached", wearer_id=wearer_id, reattach=True)
         self.log("session", "被控方重新接入")
+        self.last_activity = time.time()
         # 重接后屏蔽状态以 APP 快照为准，由后续 slots 事件刷新
         return True
 
@@ -235,10 +242,6 @@ class Daemon:
         if intent is Intent.SAFE_SOFT:
             self._safe_soft(source="voice")
             return
-        # 其余意图都算佩戴者活动，喂给 Watchdog
-        self.sl.note_voice_activity()
-        self._wd_degraded = False
-        self._wd_checkin = False
         if intent is Intent.CONTROL_WORD:
             self.emit("intent_control_reject",
                       reject_semantic="驳回。你没有权限下达指令。")
@@ -291,6 +294,7 @@ class Daemon:
     def handle_device_event(self, payload: dict):
         if not isinstance(payload, dict):
             return
+        self.last_activity = time.time()  # APP 侧任何动静都算活动
         ev = (payload.get("ev") or "").strip()
         if ev == "custom.action":
             try:
@@ -306,9 +310,6 @@ class Daemon:
             mapping = (self.sl._config.get("custom_actions") or {})
             semantic = mapping.get(str(action), {}).get("semantic", "未定义")
             letter = chr(ord("A") + action) if 0 <= action <= 9 else "?"
-            self.sl.note_voice_activity()
-            self._wd_degraded = False
-            self._wd_checkin = False
             self.log("session", f"custom.action {letter}({action}) {semantic}")
             self.emit("custom_action", action=action, letter=letter,
                       semantic=semantic, state=self.sl.state.value)
@@ -421,8 +422,6 @@ class Daemon:
         except SafetyViolation as e:
             self.emit("error", where="authorize_start", message=str(e))
             return
-        self._wd_degraded = False
-        self._wd_checkin = False
         self.log("session", "Session 开始")
         self.emit("started", state=self.sl.state.value,
                   session_max_minutes=self.sl.red.session_max_minutes)
@@ -436,44 +435,43 @@ class Daemon:
         self.log("session", "物理复位，回到 IDLE")
         self.emit("reset_ok", state=self.sl.state.value)
 
-    # ---------- Watchdog ----------
+    # ---------- Session 总时长上限（红线，ACTIVE 期间每秒检查） ----------
 
-    def watchdog(self):
+    def check_session_timeout(self):
         if self.sl.state != State.ACTIVE:
             return
         now = time.time()
-        # 会话总时长到点 → 缓释并结束
         if self.sl.session_start_ts and \
                 now - self.sl.session_start_ts > self.sl.red.session_max_minutes * 60:
             self._estop("session_timeout")
             self.sl.state = State.IDLE
-            self.log("watchdog", "session_timeout 自动结束")
+            self.log("session", "session_timeout 自动结束")
             self.emit("session_timeout", state=self.sl.state.value)
+
+    # ---------- 生命周期（无人看管自动退出，每秒检查） ----------
+
+    def check_lifecycle(self):
+        """退出路径（除 shutdown 命令外）：被控方断连超时 / 非 ACTIVE 空闲超时。
+        ACTIVE 期间不因空闲退出——Session 由 session_max_minutes 红线封顶，
+        到点回 IDLE 后空闲规则自然接管。"""
+        now = time.time()
+        if self.client and self.client.client_id:
+            self._detached_since = None
+        elif self._detached_since is None:
+            self._detached_since = now
+        if self._detached_since is not None and \
+                now - self._detached_since > self.detached_shutdown_s:
+            self._auto_exit(f"被控方断连超过 {int(self.detached_shutdown_s)}s")
             return
-        action = self.sl.watchdog_tick(now)
-        if action == "checkin" and not self._wd_checkin:
-            self._wd_checkin = True
-            self.log("watchdog", "checkin 沉默在线确认")
-            self.emit("watchdog_checkin",
-                      hint="佩戴者长时间无回应。请以当前人格口吻主动确认其在线"
-                           "（剧情化表达，不点破机制）；仍无回应将自动降级")
-        elif action == "degrade" and not self._wd_degraded:
-            self._wd_degraded = True
-            for ch in ("A", "B"):
-                nv = self.sl.current.get(ch, 0) // 2
-                if nv != self.sl.current.get(ch, 0):
-                    self._apply_strength(ch, nv)   # delta 制
-            for sid in self.slot_ids:
-                self.client.send_waveform(sid, "A", GENTLE_WAVEFORM)
-            self.log("watchdog", f"degrade current={self.sl.current}")
-            self.emit("watchdog_degrade", current=dict(self.sl.current))
-        elif action == "stop":
-            self._estop("watchdog_stop")
-            self.sl.on_safe_hard(now)  # 转入锁定流程
-            self.log("watchdog", "stop 失联停机并锁定")
-            self.emit("watchdog_stop", announce="长时间无回应，已完全停止并锁定",
-                      lock_seconds=self.sl.red.hard_lock_seconds,
-                      state=self.sl.state.value)
+        if self.sl.state != State.ACTIVE and \
+                now - self.last_activity > self.idle_shutdown_s:
+            self._auto_exit(f"空闲超过 {int(self.idle_shutdown_s)}s")
+
+    def _auto_exit(self, reason: str):
+        self.log("session", f"自动退出：{reason}")
+        self.emit("daemon_exit", reason=reason, state=self.sl.state.value)
+        self._estop(f"auto_exit:{reason}")
+        self.running = False
 
     # ---------- 主循环 ----------
 
@@ -492,6 +490,8 @@ class Daemon:
                 self.emit("error", where="inbox", message="无法解析的命令行")
         # 处理后立即清空（对话文本不持久化）
         INBOX.write_text("", encoding="utf-8")
+        if msgs:
+            self.last_activity = time.time()  # 上层任何命令都算活动
         return msgs
 
     def run(self):
@@ -548,9 +548,10 @@ class Daemon:
             if now - last_wd >= 1.0:
                 last_wd = now
                 try:
-                    self.watchdog()
+                    self.check_session_timeout()
+                    self.check_lifecycle()
                 except Exception as e:  # noqa: BLE001
-                    self.emit("error", where="watchdog", message=str(e))
+                    self.emit("error", where="session_timeout", message=str(e))
             time.sleep(0.2)
         self.cleanup()
 
