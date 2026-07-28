@@ -78,7 +78,7 @@ class Daemon:
         OUTBOX.touch(exist_ok=True)
         INBOX.touch(exist_ok=True)
         self.sl = SafetyLayer.from_config(CONFIG_PATH)
-        self.client: DglabClientType = None  # type: ignore
+        self.client = None
         self.relay = None
         self.slot_ids: list = []
         self.running = True
@@ -516,7 +516,7 @@ class Daemon:
             self.cleanup()
             return
 
-        last_wd = 0.0
+        last_tick = 0.0
         while self.running:
             # 先排空设备侧上报（custom.action 安全词/剧情动作等）
             if self.client and self.client.ws:
@@ -556,8 +556,8 @@ class Daemon:
                               message=str(e),
                               trace=traceback.format_exc()[-500:])
             now = time.time()
-            if now - last_wd >= 1.0:
-                last_wd = now
+            if now - last_tick >= 1.0:
+                last_tick = now
                 try:
                     self.check_session_timeout()
                     self.check_lifecycle()
@@ -586,8 +586,6 @@ class Daemon:
             pass
         self.log("session", "daemon 退出")
 
-
-DglabClientType = DglabV4Client
 
 if __name__ == "__main__":
     Daemon().run()

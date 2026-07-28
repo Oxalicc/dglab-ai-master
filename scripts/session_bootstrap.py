@@ -253,10 +253,7 @@ if __name__ == "__main__":
         def get_devices(self):
             return [{"slotId": "slot-1", "name": "郊狼3.0", "type": "coyote"}]
 
-        def set_intensity(self, slot, ch, v, **kw):
-            applied.append(v)
-
-    spoken, applied = [], []
+    spoken = []
 
     class FakeRelayHandle:
         def stop(self):

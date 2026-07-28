@@ -32,9 +32,7 @@ CHANNEL_ID = {"A": 0, "B": 1}
 
 ACTION_APPEND_PULSE = 0   # 裸波形数据任务
 ACTION_ADD_INTENSITY = 3  # 相对增减强度
-ACTION_SET_TEMP_INTENSITY = 4  # 临时强度（需 d 持续 ms）
-ACTION_SET_MUTE = 5       # 通道静音开关（v:true/false，p:1；Socket 模式默认静音，须控制方解除）
-ACTION_SET_INTENSITY = 7  # 绝对强度
+ACTION_SET_INTENSITY = 7  # 绝对强度（实测 APP 拒绝非零赋值，仅急停归零 v:0 可用）
 
 DEFAULT_RESPONSE_TIMEOUT = 8.0   # 与 dglab-kit 一致
 SERVER_PING_INTERVAL = 2.0       # 控制方 -> 服务端应用级 ping 间隔（纯保活，不做断连判定）
@@ -301,7 +299,7 @@ class DglabV4Client:
         print(client.pairing_qr_url())         # 渲染成二维码给 APP 扫
         client.wait_client()                   # 等待 APP 接入
         devices = client.get_devices()         # 发现设备 slotId
-        client.set_intensity(slot, "A", 20)    # 指令须先过 clamp_command()
+        client.add_intensity(slot, "A", 5)   # 指令须先过 clamp_command()
     """
 
     def __init__(self, url: str, response_timeout: float = DEFAULT_RESPONSE_TIMEOUT,
@@ -396,26 +394,9 @@ class DglabV4Client:
     def _op(self, op: dict):
         return self.rpc("device.op", op, timeout=op_timeout(op))
 
-    def set_intensity(self, slot_id: str, channel, value: int, **kw):
-        return self._op(build_op(slot_id, channel, ACTION_SET_INTENSITY,
-                                 value, **kw))
-
-    def set_mute(self, slot_id: str, channel, muted: bool):
-        """通道静音开关（官方协议 t:5，p:1）。Socket 模式下通道默认静音，
-        需控制方显式解除后才能输出；APP 的舒适/绝对上限不受影响。"""
-        return self._op({"s": slot_id,
-                         "c": CHANNEL_ID[channel] if isinstance(channel, str)
-                         else channel,
-                         "t": ACTION_SET_MUTE, "p": 1, "v": bool(muted)})
-
     def add_intensity(self, slot_id: str, channel, delta: int, **kw):
         return self._op(build_op(slot_id, channel, ACTION_ADD_INTENSITY,
                                  delta, **kw))
-
-    def set_temp_intensity(self, slot_id: str, channel, value: int,
-                           duration_ms: int, **kw):
-        return self._op(build_op(slot_id, channel, ACTION_SET_TEMP_INTENSITY,
-                                 value, duration_ms=duration_ms, **kw))
 
     def append_pulse(self, slot_id: str, channel, frames: list,
                      duration_ms: Optional[int] = None, version: int = 2, **kw):
@@ -572,9 +553,9 @@ if __name__ == "__main__":
                    WAVEFORMS["BREATHING"]["raw"], duration_ms=5000, version=2)
     assert op2["c"] == 1 and op2["t"] == 0 and op2["ver"] == 2
     assert op2["d"] == 5000 and len(op2["v"]) == 12
-    op3 = build_op("slot-1", 1, ACTION_SET_TEMP_INTENSITY, 60,
-                   duration_ms=3000, immediate=True, priority=0)
-    assert op3["t"] == 4 and op3["d"] == 3000 and op3["im"] is True
+    op3 = build_op("slot-1", 1, ACTION_ADD_INTENSITY, 5,
+                   immediate=True, priority=0)
+    assert op3["t"] == 3 and op3["v"] == 5 and op3["im"] is True
 
     # RPC 构造
     req = build_rpc("1", "device.op", op)
