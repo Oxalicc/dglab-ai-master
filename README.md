@@ -4,6 +4,14 @@
 
 让 AI Master 人格接管你的 DG-LAB 郊狼 3.0（Coyote 3.0 / DG-LAB 4 APP），开启一场沉浸式角色扮演 Session。控制权交给 AI，安全词永远留在你手里。
 
+## 下载
+
+最新 `.skill` 安装包永远在 Releases 页面：
+
+👉 **[下载 dglab-ai-master.skill](https://github.com/Oxalicc/dglab-ai-master/releases/latest)**
+
+进入页面后，在 **Assets** 里点击 `dglab-ai-master.skill` 即可下载。它本质上是个 zip 压缩包，不用解压，直接交给 AI 安装。
+
 ## 它是什么
 
 一个可以装进本地 AI Agent 应用的 Skill 技能包。装上之后，对 AI 说一句"启动 dglab 主控 session"，AI 就会：
@@ -14,14 +22,6 @@
 - 全程被双向安全防线盯着——喊出安全词，绕开 AI 直送急停，宁可误停，绝不漏停
 
 **你需要准备**：郊狼 3.0 设备 🐺 + 手机上的 DG-LAB 4 APP + 电脑上的本地 AI Agent 应用（如 Kimi 桌面版）。网页版聊天 AI 装不了 Skill，用不了。
-
-## 下载
-
-最新 `.skill` 安装包永远在 Releases 页面：
-
-👉 **[下载 dglab-ai-master.skill](https://github.com/Oxalicc/dglab-ai-master/releases/latest)**
-
-进入页面后，在 **Assets** 里点击 `dglab-ai-master.skill` 即可下载。它本质上是个 zip 压缩包，不用解压，直接交给 AI 安装。
 
 ## 安装 / 导入
 
