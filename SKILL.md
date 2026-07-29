@@ -143,7 +143,7 @@ LLM/剧本产生的每一条设备指令必须经 `SafetyLayer.clamp_command()`�
 
 - **正常结束**：用户表示结束/离开时，向 daemon 发送 `{"cmd":"shutdown"}`——
   急停、清理 IPC、关闭自建 Relay、退出进程。**不要**让对话结束而 daemon 悬留。
-- **Session 时长是剧本节奏预算，不是硬超时**：对话式交互做不到实时收尾，daemon 不设自动超时。LLM 按 `session_max_minutes` 预算安排剧本节奏，预算耗尽附近自然引导收尾；用户想继续就继续，结束只能靠用户明确表达（shutdown）或安全词。
+- **Session 时长是剧本节奏预算，不是硬超时**：对话式交互做不到实时收尾，daemon 不设自动超时。LLM 按 `session_max_minutes` 预算安排剧本节奏，预算耗尽附近自然引导收尾；用户想继续就继续。结束靠用户明确表达（shutdown）——安全词是停止与锁定，不是结束。
 - **无人看管自动退出**（阈值在配置 `"daemon"` 段可调）：
   被控方断连超过 `detached_shutdown_s`、控制面（daemon↔Relay）
   连接连续失败超过同一阈值、或非 ACTIVE 状态空闲
@@ -226,7 +226,7 @@ AI Master 的主导循环由 LLM 本人执行——读完场景文档后亲自�
 - `scripts/safety_layer.py` — 安全层（配置驱动：意图分类、钳制、FSM），含 `__main__` 自测
 - `scripts/dglab_v4_client.py` — 郊狼 3.0 V4 协议客户端（含 24 个内置波形库），含 `__main__` 离线自测
 - `scripts/session_bootstrap.py` — 启动三阶段引导（设备连接检查/安全确认/显式开始），含 `__main__` 自测
-- `scripts/session_daemon.py` — Session 守护进程（常驻持有设备连接，唯一接触硬件；inbox/outbox JSON-lines IPC；屏蔽检测、Session 超时执行、custom.action 路由）
+- `scripts/session_daemon.py` — Session 守护进程（常驻持有设备连接，唯一接触硬件；inbox/outbox JSON-lines IPC；屏蔽检测、爬升（ramp）执行、custom.action 路由）
 - `references/personas.md` — AI Master 人格模板（游戏前读选定条目）
 - `references/playbook.md` — 郊狼使用技巧与话术引导（游戏前必读）
 - `references/protocol-websocket.md` — V4 协议参考（仅排查故障时读）
