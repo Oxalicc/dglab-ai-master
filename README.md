@@ -6,7 +6,7 @@
 
 ## 下载
 
-👉 **[点我下载 dglab-ai-master.skill（latest）](https://github.com/Oxalicc/dglab-ai-master/releases/download/v1.0.0/dglab-ai-master.skill)**
+👉 **[点我下载 dglab-ai-master.skill（latest）](https://github.com/Oxalicc/dglab-ai-master/releases/download/v1.1.0/dglab-ai-master.skill)**
 
 想要别的版本就去 [Releases](https://github.com/Oxalicc/dglab-ai-master/releases) 翻。下下来的 `.skill` 不用解压，直接丢给 AI 就行啦。
 
