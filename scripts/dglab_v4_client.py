@@ -406,7 +406,10 @@ class DglabV4Client:
 
     def send_waveform(self, slot_id: str, channel, name: str,
                       duration_ms: Optional[int] = None, **kw):
-        """按内置波形名发送（如 "BREATHING"）。"""
+        """按内置波形名发送（如 "BREATHING"）。
+        默认 im:true（替换同类任务）：新剧情的波形立即覆盖设备上
+        未播完的旧输出，而不是在设备侧排队等旧任务播完。"""
+        kw.setdefault("immediate", True)
         if name not in WAVEFORMS:
             raise DglabV4Error(f"未知波形: {name}（可选见 WAVEFORMS）")
         return self.append_pulse(slot_id, channel, WAVEFORMS[name]["raw"],
@@ -582,5 +585,22 @@ if __name__ == "__main__":
     else:
         c = DglabV4Client.__new__(DglabV4Client)  # 不连网，仅验证类可实例化
         assert callable(DglabV4Client.emergency_stop)
+
+    # send_waveform 默认 im:true（新波形覆盖设备上未播完的旧输出）
+    calls = {}
+
+    class _OfflineClient(DglabV4Client):
+        def __init__(self):
+            pass
+
+        def append_pulse(self, slot_id, channel, frames, **kw):
+            calls.update(kw)
+            return {}
+
+    _OfflineClient().send_waveform("slot-1", "A", "BREATHING", duration_ms=1000)
+    assert calls.get("immediate") is True
+    calls.clear()
+    _OfflineClient().send_waveform("slot-1", "A", "BREATHING", immediate=False)
+    assert calls.get("immediate") is False          # 显式可关
 
     print("dglab_v4_client self-test OK: all assertions passed")

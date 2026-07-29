@@ -329,6 +329,13 @@ class SafetyLayer:
         span = self.red.max_intensity - self.red.min_output_intensity
         return int(round(float(level_delta) * span))
 
+    def resolve_duration(self, rel: float) -> float:
+        """相对时长 → 绝对秒：0.0–1.0 映射到 0–max_output_seconds，超界截断。
+        与强度 level 同理：LLM 用"占单次上限的几成"表达持续意图，
+        具体秒数由红线吸收——LLM 直接猜绝对秒数普遍偏短（用户反馈）。"""
+        r = min(max(float(rel), 0.0), 1.0)
+        return round(r * self.red.max_output_seconds, 1)
+
     def clamp_command(self, cmd: Command, now: Optional[float] = None) -> Command:
         """返回截断后的合法指令；不可执行时抛 SafetyViolation。"""
         now = now if now is not None else time.time()
@@ -576,5 +583,12 @@ if __name__ == "__main__":
     assert s3.resolve_level(-0.2) == 30
     assert s3.resolve_level_delta(0.25) == 18   # (100-30)*0.25 ≈ 17.5 → 18
     assert s3.resolve_level_delta(-0.1) == -7
+
+    # ---- 相对时长解析（0.0–1.0 → 0–max_output_seconds） ----
+    assert s3.resolve_duration(0.0) == 0.0
+    assert s3.resolve_duration(0.5) == 5.0      # 默认上限 10s 的一半
+    assert s3.resolve_duration(1.0) == 10.0
+    assert s3.resolve_duration(1.5) == 10.0     # 超界截断
+    assert s3.resolve_duration(-0.2) == 0.0
 
     print("safety_layer self-test OK: all assertions passed")

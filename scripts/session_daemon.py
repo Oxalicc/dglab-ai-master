@@ -12,12 +12,20 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   {"cmd":"input","text":"..."}            佩戴者文本输入（先过 classify 路由）
   {"cmd":"device","channel":"A","intensity":40,"waveform":"PULSE",
    "duration_seconds":3}                  设备指令（强制过 clamp_command）
+      可选 "duration_rel":0.5            相对时长（0.0–1.0 = 单次上限的几成，
+                                          推荐；与 duration_seconds 同时给时优先）
       可选 "delay_seconds":N（≤30）      延迟 N 秒执行（台词/动作时序对齐；
                                           执行时重新校验连接/屏蔽/钳制）
   {"cmd":"device","channel":"A","level":0.5}  相对档位：0.0=最低感知档 …
                                             1.0=红线上限（推荐，个体差异由红线吸收）
+                                            ⚠ level 0.0 ≠ 关闭！关机只能显式
+                                            intensity=0（level 映射不含 0 档）
+      可选 "verify":true                  下发后主动查询设备真实状态并回报
+                                          device_state（估值 vs 实际比对）
   {"cmd":"device","channel":"A","delta":5}  相对增减强度 t:3（红线内联校验）
   {"cmd":"device","channel":"A","level_delta":0.25}  相对增减（档位区间比例）
+  {"cmd":"query_device"}                  主动查询设备真实状态（devices.get），
+                                          回报 device_state 并按实际值回写估值
   {"cmd":"authorize_start"}               上层已核实开始口令后调用
   {"cmd":"manual_reset"}                  SAFE_LOCK 解锁（锁定期满 + 用户已确认）
   {"cmd":"meta","key":"scenario","value":"interrogation"}
@@ -28,7 +36,7 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   pairing / devices / ready / output_shielded / output_unshielded / started /
   intent_safe_hard / intent_safe_soft / intent_control_reject /
   intent_status / intent_rp / custom_action / device_event /
-  device_scheduled / device_applied / device_rejected /
+  device_scheduled / device_applied / device_rejected / device_state /
   waiting_reattach / client_attached(reattach) / client_detached /
   session_timeout / daemon_exit / locked_guidance / lock_notice / lock_status /
   reset_ok / shutdown / error / pong
@@ -454,11 +462,17 @@ class Daemon:
         if intensity is None and msg.get("level") is not None:
             # 相对档位（0.0=最低感知档 … 1.0=红线上限），个体差异由红线吸收
             intensity = self.sl.resolve_level(msg.get("level"))
+        # 持续时长：duration_rel（0.0–1.0 = 单次上限的几成，推荐）优先；
+        # duration_seconds 绝对秒兼容保留
+        if msg.get("duration_rel") is not None:
+            duration_s = self.sl.resolve_duration(msg.get("duration_rel"))
+        else:
+            duration_s = float(msg.get("duration_seconds") or 0.0)
         cmd = Command(
             channel=channel,
             intensity=intensity,
             waveform=msg.get("waveform"),
-            duration_seconds=float(msg.get("duration_seconds") or 0.0),
+            duration_seconds=duration_s,
         )
         # 开局/0 档保护：只给波形未给强度且当前为 0 时，波形在 0 档物理无感，
         # 按最小有效输出档自动起步（走 clamp，软锁定期等限制自然生效）
@@ -480,6 +494,44 @@ class Daemon:
                   intensity=clamped.intensity, waveform=clamped.waveform,
                   duration_seconds=clamped.duration_seconds,
                   current=dict(self.sl.current))
+        if msg.get("verify"):
+            # 命令后确认：主动查询设备真实状态，回报估值 vs 实际
+            self.handle_query_device(verify_of="device")
+
+    def handle_query_device(self, verify_of: str = "manual"):
+        """主动查询设备真实状态（devices.get rpc），回报 device_state：
+        估值（sl.current）vs 设备实际值比对，不一致时按实际值回写估值。
+        用于命令后确认（verify）与上层对账——估值基于增量累加，
+        设备侧衰减/APP 侧操作都会造成漂移。"""
+        if not self._ensure_client():
+            return
+        try:
+            devices = self.client.get_devices()
+        except Exception as e:  # noqa: BLE001
+            self.emit("error", where="query_device", message=str(e))
+            return
+        actual = {"A": None, "B": None}
+        for dev in devices:
+            props = dev.get("props") or {}
+            for key, ch in (("intensityA", "A"), ("intensityB", "B")):
+                if isinstance(props.get(key), (int, float)):
+                    actual[ch] = int(props[key])
+            self._update_shield(dev.get("slotState") or {})
+        estimated = dict(self.sl.current)
+        mismatch = {ch: {"estimated": estimated[ch], "actual": actual[ch]}
+                    for ch in ("A", "B")
+                    if actual[ch] is not None and actual[ch] != estimated[ch]}
+        # 按实际值回写估值（与 slots.patch 回写语义一致）
+        for ch in ("A", "B"):
+            if actual[ch] is not None:
+                self.sl.current[ch] = actual[ch]
+        self.emit("device_state", verify_of=verify_of,
+                  estimated=estimated, actual=actual,
+                  mismatch=mismatch or None,
+                  shielded=dict(self.shielded),
+                  state=self.sl.state.value)
+        if mismatch:
+            self.log("param", f"估值校正 {mismatch}")
 
     def handle_delta(self, msg: dict):
         """相对增减强度（协议 t:3，官方 SDK 惯用原语）。
@@ -760,6 +812,8 @@ class Daemon:
                         self.handle_authorize_start()
                     elif cmd == "manual_reset":
                         self.handle_manual_reset()
+                    elif cmd == "query_device":
+                        self.handle_query_device()
                     elif cmd == "shutdown":
                         self._estop("shutdown")
                         self._end_reason = "shutdown"
