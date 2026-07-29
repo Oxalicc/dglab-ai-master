@@ -49,7 +49,7 @@ class RedLines:
     min_output_intensity: int = 30    # 最小有效输出档（低档无体感；0=关闭除外，安全路径豁免）
     max_step_up: int = 10             # 单次上调步长上限
     step_up_cooldown_seconds: float = 30.0  # 两次上调之间的冷却时间（上次上调后该时长内禁止再上调）
-    max_output_seconds: float = 10.0  # 单次连续输出上限
+    max_output_seconds: float = 10.0  # 单次连续输出硬上限（纯安全截断线，LLM 不感知）
     session_max_minutes: int = 30     # Session 总时长硬上限
     soft_safe_intensity: int = 10     # 次安全词降级目标
     soft_lock_seconds: float = 180.0  # 次安全词后禁止上调时长
@@ -330,9 +330,11 @@ class SafetyLayer:
         return int(round(float(level_delta) * span))
 
     def resolve_duration(self, rel: float) -> float:
-        """相对时长 → 绝对秒：0.0–1.0 映射到 0–max_output_seconds，超界截断。
-        与强度 level 同理：LLM 用"占单次上限的几成"表达持续意图，
-        具体秒数由红线吸收——LLM 直接猜绝对秒数普遍偏短（用户反馈）。"""
+        """模糊时长意图 → 设备侧秒数：0.0–1.0 映射到 0–max_output_seconds。
+        LLM 拟人化表达"短/中/长"的感觉，不感知也不需要知道上限数值——
+        max_output_seconds 是纯安全参数（设备侧到点自停的后备），真实持续
+        时间由剧情节奏决定：下一条指令 im:true 覆盖当前输出。有明确计划的
+        时长应直接用 duration_seconds 绝对秒，不走这里。"""
         r = min(max(float(rel), 0.0), 1.0)
         return round(r * self.red.max_output_seconds, 1)
 
@@ -584,7 +586,7 @@ if __name__ == "__main__":
     assert s3.resolve_level_delta(0.25) == 18   # (100-30)*0.25 ≈ 17.5 → 18
     assert s3.resolve_level_delta(-0.1) == -7
 
-    # ---- 相对时长解析（0.0–1.0 → 0–max_output_seconds） ----
+    # ---- 模糊时长解析（0.0–1.0 → 0–max_output_seconds，纯感觉刻度） ----
     assert s3.resolve_duration(0.0) == 0.0
     assert s3.resolve_duration(0.5) == 5.0      # 默认上限 10s 的一半
     assert s3.resolve_duration(1.0) == 10.0

@@ -10,10 +10,15 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
 命令（inbox，每行一个 JSON）：
   {"cmd":"ping"}
   {"cmd":"input","text":"..."}            佩戴者文本输入（先过 classify 路由）
-  {"cmd":"device","channel":"A","intensity":40,"waveform":"PULSE",
-   "duration_seconds":3}                  设备指令（强制过 clamp_command）
-      可选 "duration_rel":0.5            相对时长（0.0–1.0 = 单次上限的几成，
-                                          推荐；与 duration_seconds 同时给时优先）
+  {"cmd":"device","channel":"A","level":0.4,"waveform":"PULSE"}
+                                          设备指令（强制过 clamp_command）。
+                                          默认不给时长 = 开放式输出（常态），
+                                          持续到下条指令 im:true 覆盖
+      可选 "duration_seconds":5           绝对秒（例外：有明确计划的有界输出，
+                                          如脉冲惩罚单段 5~10s 播完即停）
+      可选 "duration_rel":0.5             模糊时长（例外：凭感觉给一段有界输出；
+                                          0.0–1.0 映射到安全上限的几成，与
+                                          duration_seconds 同时给时优先）
       可选 "delay_seconds":N（≤30）      延迟 N 秒执行（台词/动作时序对齐；
                                           执行时重新校验连接/屏蔽/钳制）
   {"cmd":"device","channel":"A","level":0.5}  相对档位：0.0=最低感知档 …
@@ -250,8 +255,9 @@ class Daemon:
         self.log("param", f"set_strength {channel}={value} (delta {delta:+d})")
 
     def _apply_waveform(self, channel: str, name: str, duration_s: float = 0.0):
-        # 未指定时长 = 持续到单次输出上限（无 d 的波形实测只播一遍 ~1.2s，
-        # 剧情里"持续输出"的意图会被静默吞掉）
+        # 未指定时长 = 开放式输出：d 设为安全上限 max_output_seconds 作设备侧
+        # 自停后备（无 d 的波形实测只播一遍 ~1.2s，"持续输出"意图会被吞），
+        # 真实停止时机由剧情决定——下一条指令 im:true 即时覆盖。
         if duration_s <= 0:
             duration_s = float(self.sl.red.max_output_seconds)
         ms = int(duration_s * 1000)
@@ -468,8 +474,9 @@ class Daemon:
         if intensity is None and msg.get("level") is not None:
             # 相对档位（0.0=最低感知档 … 1.0=红线上限），个体差异由红线吸收
             intensity = self.sl.resolve_level(msg.get("level"))
-        # 持续时长：duration_rel（0.0–1.0 = 单次上限的几成，推荐）优先；
-        # duration_seconds 绝对秒兼容保留
+        # 持续时长三种意图：有明确计划 → duration_seconds 绝对秒；凭感觉 →
+        # duration_rel（0.0–1.0，模糊刻度，LLM 不感知上限数值）优先；
+        # 都不给 → 0.0，_apply_waveform 按开放式输出处理（覆盖制）
         if msg.get("duration_rel") is not None:
             duration_s = self.sl.resolve_duration(msg.get("duration_rel"))
         else:

@@ -78,7 +78,7 @@
     "forbidden_waveforms": [
       "SIGNAL"
     ],
-    "_note": "全部由佩戴者自主设定，效果化理解：max_intensity=强度天花板（100 即永不超 100 档）；min_output_intensity=最小有体感档（低于它基本无感，非零输出自动从该档起步）；max_step_up + step_up_cooldown_seconds=上调节奏（默认=每 30 秒最多升 10 档，下调多少回补多少额度，从 0 开到最小档豁免）；max_output_seconds=单次输出时长上限（超时自动停）；forbidden_waveforms 须为郊狼内置波形名（见 dglab_v4_client.WAVEFORMS 共 24 个），写错名字启动即报错；禁用 TEMPO_TAP/PULSATING/QUICK_RUB 会导致惩罚峰值被替换为 BREATHING（启动时警告）。三档预设见 assets/red_line_presets.json。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
+    "_note": "全部由佩戴者自主设定，效果化理解：max_intensity=强度天花板（100 即永不超 100 档）；min_output_intensity=最小有体感档（低于它基本无感，非零输出自动从该档起步）；max_step_up + step_up_cooldown_seconds=上调节奏（默认=每 30 秒最多升 10 档，下调多少回补多少额度，从 0 开到最小档豁免）；max_output_seconds=单次输出硬上限（超时自动停；纯安全参数，LLM 不感知——开放式输出到点自停，剧情推进时新指令即时覆盖旧输出）；forbidden_waveforms 须为郊狼内置波形名（见 dglab_v4_client.WAVEFORMS 共 24 个），写错名字启动即报错；禁用 TEMPO_TAP/PULSATING/QUICK_RUB 会导致惩罚峰值被替换为 BREATHING（启动时警告）。三档预设见 assets/red_line_presets.json。配置仅能在 IDLE 状态下修改，Session 运行期间冻结。"
   },
   "persona": "strict_coach",
   "custom_actions": {
