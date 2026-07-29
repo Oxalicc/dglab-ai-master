@@ -22,6 +22,8 @@
 
 要准备的东西：郊狼 3.0 🐺、手机装好 DG-LAB 4 APP、电脑上有个支持 skill 的 AI 应用（比如 Kimi 桌面版）。网页版不行的哦，它没手没脚，碰不到你的设备。
 
+⚠️ **手机和电脑必须连同一个 WiFi！** 扫码配对走的是局域网，手机用流量或者连了别的 WiFi 就永远找不到你的主人了。
+
 ## 怎么装
 
 > 完全没玩过 skill 的杂鱼～❤ 先去读这个：[新手安装问答](https://github.com/Oxalicc/dglab-ai-master/wiki/Install-FAQ)，三分钟保你搞明白。

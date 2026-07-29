@@ -21,7 +21,9 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
                                             ⚠ level 0.0 ≠ 关闭！关机只能显式
                                             intensity=0（level 映射不含 0 档）
       可选 "verify":true                  下发后主动查询设备真实状态并回报
-                                          device_state（估值 vs 实际比对）
+                                          device_state（估值 vs 实际比对）。
+                                          关机（intensity=0 / delta 降到 0）与
+                                          次安全词软降级默认自动对账，无需显式
   {"cmd":"device","channel":"A","delta":5}  相对增减强度 t:3（红线内联校验）
   {"cmd":"device","channel":"A","level_delta":0.25}  相对增减（档位区间比例）
   {"cmd":"query_device"}                  主动查询设备真实状态（devices.get），
@@ -399,6 +401,10 @@ class Daemon:
                   current=dict(self.sl.current),
                   soft_lock_seconds=self.sl.red.soft_lock_seconds,
                   state=self.sl.state.value)
+        if any(a["action"] in ("set_strength", "set_waveform") for a in actions):
+            # 软降级默认对账：漂移（自动增加/随机挑逗/硬件手动操作）
+            # 会让"已降至安全强度"成为谎报，必须确认设备真的降下去了
+            self.handle_query_device(verify_of="safe_soft")
 
     # ---------- APP 主动上报事件（custom.action 等） ----------
 
@@ -494,8 +500,10 @@ class Daemon:
                   intensity=clamped.intensity, waveform=clamped.waveform,
                   duration_seconds=clamped.duration_seconds,
                   current=dict(self.sl.current))
-        if msg.get("verify"):
-            # 命令后确认：主动查询设备真实状态，回报估值 vs 实际
+        if clamped.intensity == 0 or msg.get("verify"):
+            # 命令后确认：关机（intensity=0）默认对账——设备「自动增加」/
+            # 随机挑逗/硬件手动操作都可能让通道假关闭（实机捕获过漂移）；
+            # 其余命令按 verify:true 触发
             self.handle_query_device(verify_of="device")
 
     def handle_query_device(self, verify_of: str = "manual"):
@@ -529,9 +537,12 @@ class Daemon:
                   estimated=estimated, actual=actual,
                   mismatch=mismatch or None,
                   shielded=dict(self.shielded),
-                  state=self.sl.state.value)
+                  state=self.sl.state.value,
+                  hint=("设备实际状态与下发指令不一致——请确认 APP 已关闭"
+                        "「自动增加」与「随机挑逗」，且未在硬件上手动操作"
+                        if mismatch else None))
         if mismatch:
-            self.log("param", f"估值校正 {mismatch}")
+            self.log("param", f"估值校正 {mismatch}（verify_of={verify_of}）")
 
     def handle_delta(self, msg: dict):
         """相对增减强度（协议 t:3，官方 SDK 惯用原语）。
@@ -586,6 +597,9 @@ class Daemon:
         self.log("param", f"add_strength {channel}{delta:+d} -> ~{estimate}")
         self.emit("device_applied", channel=channel, delta=delta,
                   estimated=estimate, current=dict(self.sl.current))
+        if estimate == 0:
+            # delta 路径降到 0 同样默认对账（假关机漂移防护）
+            self.handle_query_device(verify_of="delta")
 
     def handle_authorize_start(self):
         cfg = self.sl._config

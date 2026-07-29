@@ -187,8 +187,8 @@ class Bootstrap:
             except Exception as e:
                 self.speak(f"第 {attempt} 次连接失败：{e}")
                 if attempt < MAX_CONNECT_ATTEMPTS:
-                    self.speak("引导：请确认 ① Relay 地址可连通 ② 郊狼已开机 "
-                               "③ APP 已更新到 DG-LAB 4 并扫描上方二维码。"
+                    self.speak("引导：请确认 ① 手机和电脑连着同一个 WiFi"
+                               "② 郊狼已开机 ③ APP 已更新到 DG-LAB 4 并扫描上方二维码。"
                                "准备好后说'重试'。")
                     answer = self.hear()
                     if "重试" not in answer and "retry" not in answer.lower():
@@ -209,8 +209,8 @@ class Bootstrap:
         names = "、".join(d.get("name", d.get("slotId", "?")) for d in self.devices)
         self.speak(f"设备在线：{names}。")
         # 真机实测两个必查项，漏掉任意一个都会表现为"没输出/失控"
-        self.speak("开局前请在 APP 确认两件事：① 舒适设置里关闭「自动增加」"
-                   "（否则设备会自行爬升强度，Master 失去独占控制，急停归零后还会再爬）；"
+        self.speak("开局前请在 APP 确认两件事：① 舒适设置里关闭「自动增加」和「随机挑逗」"
+                   "（否则设备会自行爬升或输出，Master 失去独占控制，急停归零后还会再爬）；"
                    "② 两个通道都没有开启「屏蔽输出」（屏蔽只能在 APP 里解除）。")
 
     # ================= 阶段二：安全确认 =================
