@@ -6,7 +6,7 @@
 
 ## 下载
 
-👉 **[点我下载 dglab-ai-master.skill（v1.0.0）](https://github.com/Oxalicc/dglab-ai-master/releases/download/v1.0.0/dglab-ai-master.skill)**
+👉 **[点我下载 dglab-ai-master.skill（latest）](https://github.com/Oxalicc/dglab-ai-master/releases/download/v1.0.0/dglab-ai-master.skill)**
 
 想要别的版本就去 [Releases](https://github.com/Oxalicc/dglab-ai-master/releases) 翻。下下来的 `.skill` 不用解压，直接丢给 AI 就行啦。
 
@@ -17,6 +17,7 @@
 - 先拉着你把安全词、强度上限、时长一条条确认完，说的都是人话，不糊弄
 - 变出一个二维码，拿 DG-LAB 4 APP 扫一下就连上设备了
 - 然后你的 Master 上线开始调教，现场编剧情。倒计时、忍耐考核、发落奖惩，每局都不一样，没有剧本
+- 电流和台词严丝合缝：电流会卡在台词说完（或者说到一半）的那一刻落下，不会你还没看懂剧情就被电了捏
 - 全程有人盯着底线。你喊安全词，根本不过 AI 的脑子，直接急停。宁可误停，绝不漏停
 
 要准备的东西：郊狼 3.0 🐺、手机装好 DG-LAB 4 APP、电脑上有个支持 skill 的 AI 应用（比如 Kimi 桌面版）。网页版不行的哦，它没手没脚，碰不到你的设备。

@@ -12,6 +12,8 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   {"cmd":"input","text":"..."}            佩戴者文本输入（先过 classify 路由）
   {"cmd":"device","channel":"A","intensity":40,"waveform":"PULSE",
    "duration_seconds":3}                  设备指令（强制过 clamp_command）
+      可选 "delay_seconds":N（≤30）      延迟 N 秒执行（台词/动作时序对齐；
+                                          执行时重新校验连接/屏蔽/钳制）
   {"cmd":"device","channel":"A","level":0.5}  相对档位：0.0=最低感知档 …
                                             1.0=红线上限（推荐，个体差异由红线吸收）
   {"cmd":"device","channel":"A","delta":5}  相对增减强度 t:3（红线内联校验）
@@ -26,7 +28,7 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   pairing / devices / ready / output_shielded / output_unshielded / started /
   intent_safe_hard / intent_safe_soft / intent_control_reject /
   intent_status / intent_rp / custom_action / device_event /
-  device_applied / device_rejected /
+  device_scheduled / device_applied / device_rejected /
   waiting_reattach / client_attached(reattach) / client_detached /
   session_timeout / daemon_exit / locked_guidance / lock_notice / lock_status /
   reset_ok / shutdown / error / pong
@@ -40,6 +42,8 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   - 「屏蔽输出」为 APP 本地功能（用户确认），协议无法解除（实测 t:5 被拒）；
     检测到 isMuted:true 只提示佩戴者在 APP 中「解除屏蔽输出」。
   - 每条 device 命令强制过 clamp_command；SafetyViolation 一律丢弃。
+  - 延迟待发指令（delay_seconds）在任何安全事件（急停/次安全词/超时/退出）
+    发生时整队作废，不带着旧剧情节奏进入新状态。
   - ACTIVE 期间每秒检查 Session 总时长，到点自动缓释并结束。
   - 生命周期：被控方断连超时（默认 300s）或非 ACTIVE 空闲超时
     （默认 600s，配置 "daemon" 段可调）自动急停退出，不遗留进程。
@@ -98,6 +102,7 @@ class Daemon:
         self._safeword_events = {"hard": 0, "soft": 0}  # 场次安全词计数（play_history 用）
         self._session_meta = {}            # 上层经 meta 命令写入的场次元数据（场景名等）
         self._end_reason = "unknown"       # daemon 退出原因（play_history 用）
+        self._pending = []                 # 延迟待发设备指令 [{at, msg}]（台词/动作时序对齐）
 
     # ---------- 输出 ----------
 
@@ -255,6 +260,7 @@ class Daemon:
 
     def _estop(self, reason: str):
         # 清理任务并归零（屏蔽输出是 APP 本地功能，协议侧无法联动，只做归零）
+        self._clear_pending(reason)
         errors = []
         try:
             errors += self.client.emergency_stop()
@@ -265,6 +271,51 @@ class Daemon:
         return errors
 
     # ---------- 命令处理 ----------
+
+    MAX_DELAY_SECONDS = 30.0   # 延迟上限：过远的"未来指令"是失控隐患
+    MAX_PENDING = 8            # 待发队列上限，防上层失控堆积
+
+    def _dispatch_device(self, msg: dict):
+        """时序对齐入口：带 delay_seconds 的指令进入待发队列，到点在主循环
+        执行；执行时仍走完整 handle_device（连接/屏蔽/钳制全部届时重校验）。
+        典型用法：先发延迟指令再输出台词，让电流卡在台词说到一半时命中。"""
+        try:
+            delay = float(msg.get("delay_seconds") or 0.0)
+        except (TypeError, ValueError):
+            delay = 0.0
+        if delay <= 0:
+            self.handle_device(msg)
+            return
+        delay = min(delay, self.MAX_DELAY_SECONDS)
+        if len(self._pending) >= self.MAX_PENDING:
+            self.emit("device_rejected", reason="待发队列已满，延迟指令过多")
+            return
+        msg = dict(msg)
+        msg.pop("delay_seconds", None)
+        self._pending.append({"at": time.time() + delay, "msg": msg})
+        self.emit("device_scheduled", execute_in=delay,
+                  channel=msg.get("channel", "A"))
+
+    def fire_pending(self):
+        """主循环每次迭代调用：执行所有到点的待发指令。"""
+        now = time.time()
+        due = [p for p in self._pending if p["at"] <= now]
+        if not due:
+            return
+        self._pending = [p for p in self._pending if p["at"] > now]
+        for p in due:
+            try:
+                self.handle_device(p["msg"])
+            except Exception as e:  # noqa: BLE001
+                self.emit("error", where="pending", message=str(e))
+
+    def _clear_pending(self, reason: str):
+        """安全事件（急停/次安全词/超时/退出）清空待发队列：
+        队列里的指令是基于旧剧情节奏排的，安全状态变了就必须作废。"""
+        if self._pending:
+            n = len(self._pending)
+            self._pending = []
+            self.log("session", f"清空待发指令 x{n}：{reason}")
 
     def handle_input(self, text: str):
         intent = self.sl.classify(text)
@@ -324,6 +375,7 @@ class Daemon:
                   state=self.sl.state.value)
 
     def _safe_soft(self, source: str):
+        self._clear_pending("safe_soft")  # 软锁期间禁止上调，待发指令全部作废
         prev = dict(self.sl.current)  # on_safe_soft 会先行更新估值，先留基准
         actions = self.sl.on_safe_soft()
         for a in actions:
@@ -699,7 +751,7 @@ class Daemon:
                     elif cmd == "input":
                         self.handle_input(str(msg.get("text", "")))
                     elif cmd == "device":
-                        self.handle_device(msg)
+                        self._dispatch_device(msg)
                     elif cmd == "meta":
                         # 上层写入场次元数据（场景名等，play_history 用），纯键值
                         self._session_meta[str(msg.get("key"))[:50]] = \
@@ -729,6 +781,7 @@ class Daemon:
                     self.check_lock_notices()
                 except Exception as e:  # noqa: BLE001
                     self.emit("error", where="session_timeout", message=str(e))
+            self.fire_pending()  # 到点的延迟指令（0.2s 循环精度足够台词同步）
             time.sleep(0.2)
         self.cleanup()
 
