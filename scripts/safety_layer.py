@@ -50,7 +50,7 @@ class RedLines:
     max_step_up: int = 10             # 单次上调步长上限
     step_up_cooldown_seconds: float = 30.0  # 两次上调之间的冷却时间（上次上调后该时长内禁止再上调）
     max_output_seconds: float = 10.0  # 单次连续输出硬上限（纯安全截断线，LLM 不感知）
-    session_max_minutes: int = 30     # Session 总时长硬上限
+    session_max_minutes: int = 30     # 剧本时长预算（软参考，给 LLM 排节奏；无硬超时）
     soft_safe_intensity: int = 10     # 次安全词降级目标
     soft_lock_seconds: float = 180.0  # 次安全词后禁止上调时长
     hard_lock_seconds: float = 300.0  # 主安全词后安全锁定时长

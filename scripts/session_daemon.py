@@ -21,6 +21,13 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
                                           duration_seconds 同时给时优先）
       可选 "delay_seconds":N（≤30）      延迟 N 秒执行（台词/动作时序对齐；
                                           执行时重新校验连接/屏蔽/钳制）
+      可选 "ramp":true                   爬升模式：只定目标档位，daemon 每秒
+                                          在上调预算（max_step_up/冷却）内自动
+                                          步进直到目标，到顶发 ramp_done。
+                                          目标 ≤ 当前值时按普通一次性命令走。
+                                          同通道新指令/急停类安全事件自动取消；
+                                          次安全词只暂停（软锁期步进被拒，
+                                          锁满自动恢复），不作废
   {"cmd":"device","channel":"A","level":0.5}  相对档位：0.0=最低感知档 …
                                             1.0=红线上限（推荐，个体差异由红线吸收）
                                             ⚠ level 0.0 ≠ 关闭！关机只能显式
@@ -44,11 +51,12 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   intent_safe_hard / intent_safe_soft / intent_control_reject /
   intent_status / intent_rp / custom_action / device_event /
   device_scheduled / device_applied / device_rejected / device_state /
+  ramp_started / ramp_done /
   waiting_reattach / client_attached(reattach) / client_detached /
-  session_timeout / daemon_exit / locked_guidance / lock_notice / lock_status /
+  daemon_exit / locked_guidance / lock_notice / lock_status /
   reset_ok / shutdown / error / pong
   （pong/lock_status 负载为 _status() 全量仪表盘：state/current/up_budget/
-  双锁定剩余秒/shielded/client_connected/relay/session_remaining_s）
+  双锁定剩余秒/shielded/client_connected/relay/剧本预算剩余秒）
 
 安全不变量（本进程内强制，不依赖上层）：
   - 佩戴者输入一律先过 SafetyLayer.classify；安全词绕过 LLM 直接执行。
@@ -59,7 +67,11 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   - 每条 device 命令强制过 clamp_command；SafetyViolation 一律丢弃。
   - 延迟待发指令（delay_seconds）在任何安全事件（急停/次安全词/超时/退出）
     发生时整队作废，不带着旧剧情节奏进入新状态。
-  - ACTIVE 期间每秒检查 Session 总时长，到点自动缓释并结束。
+  - 爬升（ramp）每一步都独立过 clamp_command：上调预算/冷却/软锁逐秒
+    重新校验（软锁期步进被拒即暂停，锁满自动恢复）；急停类安全事件与
+    同通道新指令即时取消爬升。
+  - 无 Session 硬超时：对话式交互做不到实时收尾，session_max_minutes
+    只是给上层的剧本节奏预算（软参考），到点不自动急停。
   - 生命周期：被控方断连超时（默认 300s）或非 ACTIVE 空闲超时
     （默认 600s，配置 "daemon" 段可调）自动急停退出，不遗留进程。
   - 日志只记安全词时间戳/参数变更/会话起止，不记对话文本。
@@ -118,12 +130,16 @@ class Daemon:
         self._session_meta = {}            # 上层经 meta 命令写入的场次元数据（场景名等）
         self._end_reason = "unknown"       # daemon 退出原因（play_history 用）
         self._pending = []                 # 延迟待发设备指令 [{at, msg}]（台词/动作时序对齐）
+        self._ramp = {"A": None, "B": None}  # 爬升目标档位（LLM 定目标，
+                                             # daemon 在上调预算内分周期执行）
 
     # ---------- 输出 ----------
 
     def _status(self) -> dict:
         """设备状态仪表盘：一条 ping 回答"现在设备处于什么状态"。"""
         now = time.time()
+        # 剧本预算剩余（软参考）：session_max_minutes 是给 LLM 排节奏的
+        # 预算，不是硬超时——对话式交互做不到实时收尾，到点不自动急停
         remaining = None
         if self.sl.session_start_ts and self.sl.state == State.ACTIVE:
             total = self.sl.red.session_max_minutes * 60
@@ -277,6 +293,7 @@ class Daemon:
     def _estop(self, reason: str):
         # 清理任务并归零（屏蔽输出是 APP 本地功能，协议侧无法联动，只做归零）
         self._clear_pending(reason)
+        self._ramp = {"A": None, "B": None}
         errors = []
         try:
             errors += self.client.emergency_stop()
@@ -392,6 +409,8 @@ class Daemon:
 
     def _safe_soft(self, source: str):
         self._clear_pending("safe_soft")  # 软锁期间禁止上调，待发指令全部作废
+        # 爬升不作废：软锁期步进被 clamp 拒绝即暂停，锁满自动恢复步进——
+        # 次安全词是缓冲不是逃跑，不该抹掉剧情爬到一半的目标
         prev = dict(self.sl.current)  # on_safe_soft 会先行更新估值，先留基准
         actions = self.sl.on_safe_soft()
         for a in actions:
@@ -481,6 +500,15 @@ class Daemon:
             duration_s = self.sl.resolve_duration(msg.get("duration_rel"))
         else:
             duration_s = float(msg.get("duration_seconds") or 0.0)
+        # 同通道新指令到达即取消旧爬升（覆盖语义，与 im:true 一致）
+        self._ramp[channel] = None
+        if msg.get("ramp") and intensity is not None \
+                and intensity > self.sl.current.get(channel, 0):
+            # 爬升原语：LLM 只定目标，daemon 在上调预算内分周期步进。
+            # 目标 ≤ 当前值时按普通一次性命令走（下调不受预算限制）
+            self._start_ramp(channel, intensity, msg.get("waveform"),
+                             duration_s)
+            return
         cmd = Command(
             channel=channel,
             intensity=intensity,
@@ -563,6 +591,7 @@ class Daemon:
             self.emit("output_shielded", channel=channel,
                       hint="设备通道被屏蔽输出，请在 APP 中「解除屏蔽输出」")
             return
+        self._ramp[channel] = None  # 相对增减同样覆盖旧爬升
         try:
             if msg.get("level_delta") is not None:
                 # 相对增减（档位区间比例），换算后走同一套红线校验
@@ -608,6 +637,79 @@ class Daemon:
             # delta 路径降到 0 同样默认对账（假关机漂移防护）
             self.handle_query_device(verify_of="delta")
 
+    # ---------- 爬升原语（ramp） ----------
+
+    def _start_ramp(self, channel: str, target: int, waveform,
+                    duration_s: float):
+        """启动爬升：立即执行第一步，之后每秒自动步进直到 target。
+        同消息带的波形立即下发（一次性，不随爬升重复）。"""
+        self._ramp[channel] = target
+        self.emit("ramp_started", channel=channel, target=target,
+                  current=self.sl.current.get(channel, 0))
+        if waveform:
+            cmd = Command(channel=channel, intensity=None, waveform=waveform,
+                          duration_seconds=duration_s)
+            try:
+                clamped = self.sl.clamp_command(cmd)
+            except SafetyViolation as e:
+                self.emit("device_rejected", reason=str(e))
+            else:
+                self._apply_waveform(clamped.channel, clamped.waveform,
+                                     clamped.duration_seconds)
+        self._ramp_step(channel)
+
+    def _ramp_step(self, channel: str):
+        """执行一次爬升步进：走完整 clamp（预算/冷却/软锁自然生效，
+        预算不足时 clamp 自动部分履行，耗尽抛异常则本 tick 跳过下秒重试）。
+        到顶或无进展（目标超上限被钳回）时结束爬升。"""
+        target = self._ramp.get(channel)
+        if target is None:
+            return
+        prev = self.sl.current.get(channel, 0)  # clamp 会先行更新估值
+        if prev >= target:
+            self._finish_ramp(channel)
+            return
+        cmd = Command(channel=channel, intensity=target, waveform=None,
+                      duration_seconds=0.0)
+        try:
+            clamped = self.sl.clamp_command(cmd)
+        except SafetyViolation:
+            return
+        applied = clamped.intensity
+        if applied is None or applied <= prev:
+            self._finish_ramp(channel)
+            return
+        self._apply_strength(channel, applied, base=prev)
+        self.emit("device_applied", channel=channel, intensity=applied,
+                  ramp=True, target=target, current=dict(self.sl.current))
+        if applied >= target:
+            self._finish_ramp(channel)
+
+    def _finish_ramp(self, channel: str):
+        target = self._ramp.get(channel)
+        self._ramp[channel] = None
+        if target is not None:
+            self.emit("ramp_done", channel=channel, target=target,
+                      intensity=self.sl.current.get(channel, 0),
+                      current=dict(self.sl.current))
+
+    def _tick_ramp(self):
+        """每秒推进各通道爬升。回合制 LLM 一拍一条指令，靠单发命令永远
+        爬不过上调预算的限速天花板（实机：上限 80 全程没超过 55）——
+        爬升必须是 daemon 的持续动作，LLM 只负责定目标。"""
+        if self.sl.state != State.ACTIVE:
+            if any(v is not None for v in self._ramp.values()):
+                self._ramp = {"A": None, "B": None}
+            return
+        for ch in ("A", "B"):
+            if self._ramp.get(ch) is None or self.shielded.get(ch):
+                continue
+            try:
+                self._ramp_step(ch)
+            except Exception as e:  # noqa: BLE001
+                self._ramp[ch] = None
+                self.emit("error", where="ramp", message=str(e))
+
     def handle_authorize_start(self):
         cfg = self.sl._config
         age_ok = bool((cfg.get("wearer") or {}).get("age_verified_at"))
@@ -617,8 +719,9 @@ class Daemon:
             self.emit("error", where="authorize_start", message=str(e))
             return
         self.log("session", "Session 开始")
+        # 时长预算随行上报：供上层排剧本节奏，非硬超时
         self.emit("started", state=self.sl.state.value,
-                  session_max_minutes=self.sl.red.session_max_minutes)
+                  session_budget_minutes=self.sl.red.session_max_minutes)
 
     def _do_reset(self, source: str):
         try:
@@ -632,19 +735,6 @@ class Daemon:
 
     def handle_manual_reset(self):
         self._do_reset(source="manual_reset")
-
-    # ---------- Session 总时长上限（红线，ACTIVE 期间每秒检查） ----------
-
-    def check_session_timeout(self):
-        if self.sl.state != State.ACTIVE:
-            return
-        now = time.time()
-        if self.sl.session_start_ts and \
-                now - self.sl.session_start_ts > self.sl.red.session_max_minutes * 60:
-            self._estop("session_timeout")
-            self.sl.state = State.IDLE
-            self.log("session", "session_timeout 自动结束")
-            self.emit("session_timeout", state=self.sl.state.value)
 
     # ---------- SAFE_LOCK 可见性（每秒检查） ----------
 
@@ -674,8 +764,8 @@ class Daemon:
 
     def check_lifecycle(self):
         """退出路径（除 shutdown 命令外）：被控方断连超时 / 非 ACTIVE 空闲超时。
-        ACTIVE 期间不因空闲退出——Session 由 session_max_minutes 红线封顶，
-        到点回 IDLE 后空闲规则自然接管。"""
+        ACTIVE 期间不因空闲退出——没有硬超时，Session 由用户明确结束
+        （shutdown/安全词后退出）或断连规则接管。"""
         now = time.time()
         if self.client and self.client.client_id:
             self._detached_since = None
@@ -851,11 +941,11 @@ class Daemon:
             if now - last_tick >= 1.0:
                 last_tick = now
                 try:
-                    self.check_session_timeout()
                     self.check_lifecycle()
                     self.check_lock_notices()
+                    self._tick_ramp()
                 except Exception as e:  # noqa: BLE001
-                    self.emit("error", where="session_timeout", message=str(e))
+                    self.emit("error", where="tick", message=str(e))
             self.fire_pending()  # 到点的延迟指令（0.2s 循环精度足够台词同步）
             time.sleep(0.2)
         self.cleanup()
