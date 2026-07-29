@@ -56,7 +56,8 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   daemon_exit / locked_guidance / lock_notice / lock_status /
   reset_ok / shutdown / error / pong
   （pong/lock_status 负载为 _status() 全量仪表盘：state/current/up_budget/
-  双锁定剩余秒/shielded/client_connected/relay/剧本预算剩余秒）
+  双锁定剩余秒/shielded/client_connected/relay/session_remaining_s
+  （剧本预算剩余，非硬超时））
 
 安全不变量（本进程内强制，不依赖上层）：
   - 佩戴者输入一律先过 SafetyLayer.classify；安全词绕过 LLM 直接执行。
@@ -65,7 +66,7 @@ session_daemon.py — DGLAB AI Master Session 守护进程。
   - 「屏蔽输出」为 APP 本地功能（用户确认），协议无法解除（实测 t:5 被拒）；
     检测到 isMuted:true 只提示佩戴者在 APP 中「解除屏蔽输出」。
   - 每条 device 命令强制过 clamp_command；SafetyViolation 一律丢弃。
-  - 延迟待发指令（delay_seconds）在任何安全事件（急停/次安全词/超时/退出）
+  - 延迟待发指令（delay_seconds）在任何安全事件（急停/次安全词/自动退出）
     发生时整队作废，不带着旧剧情节奏进入新状态。
   - 爬升（ramp）每一步都独立过 clamp_command：上调预算/冷却/软锁逐秒
     重新校验（软锁期步进被拒即暂停，锁满自动恢复）；急停类安全事件与
@@ -343,7 +344,7 @@ class Daemon:
                 self.emit("error", where="pending", message=str(e))
 
     def _clear_pending(self, reason: str):
-        """安全事件（急停/次安全词/超时/退出）清空待发队列：
+        """安全事件（急停/次安全词/自动退出）清空待发队列：
         队列里的指令是基于旧剧情节奏排的，安全状态变了就必须作废。"""
         if self._pending:
             n = len(self._pending)
@@ -581,7 +582,10 @@ class Daemon:
 
     def handle_delta(self, msg: dict):
         """相对增减强度（协议 t:3，官方 SDK 惯用原语）。
-        红线：仅 ACTIVE；|delta| ≤ max_step_up；结果估值落在 [0, max_intensity]。"""
+        换算为绝对目标后走 clamp_command 完整钳制（软锁/上调预算/冷却/
+        最小档抬升/上限与绝对指令完全同一套语义），再以 t:3 增量形式
+        下发实际达成的部分——预算不足时 clamp 自动部分履行，
+        软锁/非 ACTIVE 直接拒绝。"""
         if self.sl.state != State.ACTIVE:
             self.emit("device_rejected",
                       reason=f"状态 {self.sl.state.value} 禁止下发指令")
@@ -594,46 +598,32 @@ class Daemon:
         self._ramp[channel] = None  # 相对增减同样覆盖旧爬升
         try:
             if msg.get("level_delta") is not None:
-                # 相对增减（档位区间比例），换算后走同一套红线校验
                 delta = self.sl.resolve_level_delta(msg.get("level_delta"))
             else:
                 delta = int(msg.get("delta"))
         except (TypeError, ValueError):
             self.emit("device_rejected", reason="delta 非法")
             return
-        red = self.sl.red
-        cur = self.sl.current.get(channel, 0)
-        estimate = cur + delta
-        # 负增量防护：估值低于 0 钳到 0（"0 档还在减"无意义且空耗指令）
-        if estimate < 0:
-            estimate = 0
-            delta = -cur
-        if delta == 0:
+        prev = self.sl.current.get(channel, 0)  # clamp 会先行更新估值
+        estimate = max(0, prev + delta)  # "0 档还在减"无意义，钳到 0
+        cmd = Command(channel=channel, intensity=estimate, waveform=None,
+                      duration_seconds=0.0)
+        try:
+            clamped = self.sl.clamp_command(cmd)
+        except SafetyViolation as e:
+            self.emit("device_rejected", reason=str(e))
+            return
+        applied = clamped.intensity
+        actual_delta = applied - prev
+        if actual_delta == 0:
             self.emit("device_applied", channel=channel, delta=0,
-                      estimated=cur, note="档位无变化，未下发",
+                      estimated=prev, note="档位无变化，未下发",
                       current=dict(self.sl.current))
             return
-        # 最小有效输出档：非零结果抬到 min_output_intensity（0=关闭除外）
-        if 0 < estimate < red.min_output_intensity:
-            estimate = red.min_output_intensity
-            delta = estimate - cur
-        # 起步（从 0 直达最小档）豁免步长限制；其余受 max_step_up 约束
-        if not (cur == 0 and estimate <= red.min_output_intensity) \
-                and abs(delta) > red.max_step_up:
-            self.emit("device_rejected",
-                      reason=f"单步 |{delta}| 超过红线 max_step_up={red.max_step_up}")
-            return
-        if estimate > red.max_intensity:
-            self.emit("device_rejected",
-                      reason=f"增减后估值 {estimate} 超过上限 {red.max_intensity}")
-            return
-        for sid in self.slot_ids:
-            self.client.add_intensity(sid, channel, delta)
-        self.sl.current[channel] = estimate
-        self.log("param", f"add_strength {channel}{delta:+d} -> ~{estimate}")
-        self.emit("device_applied", channel=channel, delta=delta,
-                  estimated=estimate, current=dict(self.sl.current))
-        if estimate == 0:
+        self._apply_strength(channel, applied, base=prev)
+        self.emit("device_applied", channel=channel, delta=actual_delta,
+                  estimated=applied, current=dict(self.sl.current))
+        if applied == 0:
             # delta 路径降到 0 同样默认对账（假关机漂移防护）
             self.handle_query_device(verify_of="delta")
 
@@ -643,6 +633,12 @@ class Daemon:
                     duration_s: float):
         """启动爬升：立即执行第一步，之后每秒自动步进直到 target。
         同消息带的波形立即下发（一次性，不随爬升重复）。"""
+        if self.sl.state != State.ACTIVE:
+            # 与普通命令一致的显式拒绝——先 emit ramp_started 再被 clamp
+            # 静默吞掉会让上层以为爬升在跑（假启动）
+            self.emit("device_rejected",
+                      reason=f"状态 {self.sl.state.value} 禁止下发指令")
+            return
         self._ramp[channel] = target
         self.emit("ramp_started", channel=channel, target=target,
                   current=self.sl.current.get(channel, 0))
